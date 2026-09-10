@@ -21,11 +21,18 @@ async fn main() {
 
     static_data::gtfs_static_handler(tx_static_data).await;
 
+    let (tx_new_static_data, mut rx_new_static_data) = mpsc::channel(1);
+
     tokio::spawn(update_static_data_handler(
         rx_static_data,
+        tx_new_static_data,
         Arc::clone(&active_static_data),
     ));
 
+    dbg!("Waiting to recieve static data");
+    // Wait for first round of static data before entering loop
+    // TODO: Later on, we will use this to signal new static data when stop preference changes
+    rx_new_static_data.recv().await;
     let mut gtfs_rt_fetch_interval = time::interval(Duration::from_secs(30));
     loop {
         gtfs_rt_fetch_interval.tick().await;
@@ -55,6 +62,7 @@ async fn main() {
 
 async fn update_static_data_handler(
     mut rx_static_data: mpsc::Receiver<StaticData>,
+    tx_new_static_data: mpsc::Sender<u8>,
     old_data: Arc<Mutex<Option<StaticData>>>,
 ) {
     while let Some(new_data) = rx_static_data.recv().await {
@@ -62,6 +70,7 @@ async fn update_static_data_handler(
         let mut old_inner = old_data.lock().await;
         old_inner.as_mut().unwrap().relevant_stop_ids = new_data.relevant_stop_ids;
         old_inner.as_mut().unwrap().stop_lookup = new_data.stop_lookup;
+        tx_new_static_data.send(0).await.unwrap();
     }
 }
 
