@@ -14,7 +14,7 @@ pub mod static_data;
 async fn main() {
     let active_static_data = Arc::new(Mutex::new(Some(StaticData {
         relevant_stop_ids: vec![],
-        header_lookup: HashMap::new(),
+        stop_lookup: HashMap::new(),
     })));
 
     let (tx_static_data, rx_static_data) = mpsc::channel(2);
@@ -61,7 +61,7 @@ async fn update_static_data_handler(
         dbg!("Recieved new static data");
         let mut old_inner = old_data.lock().await;
         old_inner.as_mut().unwrap().relevant_stop_ids = new_data.relevant_stop_ids;
-        old_inner.as_mut().unwrap().header_lookup = new_data.header_lookup;
+        old_inner.as_mut().unwrap().stop_lookup = new_data.stop_lookup;
     }
 }
 
@@ -105,32 +105,18 @@ fn feed_entity_to_packet(entity: &FeedEntity, static_data: &StaticData) -> Optio
         route_id: entity.trip_update.as_ref()?.trip.route_id.as_ref()?.clone(),
         stop_id: next_update.stop_id.as_ref()?.clone(),
         trip_headsign: static_data
-            .header_lookup
-            .get(entity.trip_update.as_ref()?.trip.trip_id.as_ref().unwrap())
-            .unwrap_or_else(|| {
-                // TODO: Figure out a better way to work around NYC MTA's trip_id convention. This
-                // currently works as a backup when they drop the suffix of a trip_id
-                let binding = "default".to_string();
-                let key = static_data
-                    .header_lookup
-                    .keys()
-                    .find(|key| {
-                        key.contains(
-                            entity
-                                .trip_update
-                                .as_ref()
-                                .unwrap()
-                                .trip
-                                .trip_id
-                                .clone()
-                                .unwrap()
-                                .as_str(),
-                        )
-                    })
-                    .unwrap_or(&binding);
-                static_data.header_lookup.get(key).unwrap()
-            })
-            .to_string(),
+            .stop_lookup
+            .get(
+                &entity
+                    .trip_update
+                    .as_ref()?
+                    .stop_time_update
+                    .iter()
+                    .last()?
+                    .clone()
+                    .stop_id?,
+            )?
+            .clone(),
         mins_until_arrival: mins_until,
         delay: next_update.arrival?.delay,
     })

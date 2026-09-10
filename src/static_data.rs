@@ -20,7 +20,7 @@ pub static TEST_STOP_NAME: &str = EAST_BROADWAY_STOP_NAME;
 
 pub struct StaticData {
     pub relevant_stop_ids: Vec<String>,
-    pub header_lookup: HashMap<String, Arc<String>>,
+    pub stop_lookup: HashMap<String, String>, // stop_id -> stop_name
 }
 
 pub async fn gtfs_static_handler(tx_static_data: mpsc::Sender<StaticData>) {
@@ -62,49 +62,17 @@ async fn parse_and_filter_gtfs_static_data(
         let stops: Vec<Stop> = rdr.deserialize().collect::<Result<_, _>>().unwrap();
         dbg!("Getting Stop IDs...");
         let relevant_stop_ids = get_child_stop_ids_by_station_name(&stops, chosen_stop);
-
-        drop(rdr);
-
-        let mut rdr = csv::Reader::from_reader(zip_reader.by_name("trips.txt").unwrap());
-        dbg!("Deserializing Trips...");
-        let trips: Vec<Trip> = rdr.deserialize().collect::<Result<_, _>>().unwrap();
-
         dbg!("Building lookup...");
-        let trip_headsigns: Vec<Arc<String>> = trips.iter().fold(Vec::new(), |mut acc, trip| {
-            if !acc
-                .iter()
-                .filter(|x| x.as_str() == trip.trip_headsign)
-                .collect::<Vec<&Arc<String>>>()
-                .is_empty()
-            {
-                acc
-            } else {
-                acc.push(Arc::new(trip.trip_headsign.to_string()));
-                acc
-            }
+
+        let stop_lookup = stops.iter().fold(HashMap::new(), |mut acc, stop| {
+            acc.insert(stop.stop_id.clone(), stop.stop_name.clone());
+            acc
         });
-
-        // TODO: Right now, some trips in a direction with only one endpoint do not specify the last
-        // three chars of trip_id, so a direct match doesn't always work (WTF WHY)
-        let mut header_lookup: HashMap<String, Arc<String>> =
-            trips.iter().fold(HashMap::new(), |mut acc, trip| {
-                let headsign_reference: &Arc<String> = trip_headsigns
-                    .iter()
-                    .find(|x| x.as_str() == trip.trip_headsign)
-                    .unwrap();
-                acc.insert(
-                    trip.trip_id.split_once('_').unwrap().1.to_string(),
-                    Arc::clone(headsign_reference),
-                );
-                acc
-            });
-        header_lookup.insert("default".to_string(), Arc::new("Unknown".to_string()));
-
         dbg!("Sending Static Data");
         tx_static_data
             .send(StaticData {
                 relevant_stop_ids,
-                header_lookup,
+                stop_lookup,
             })
             .await
             .unwrap()
