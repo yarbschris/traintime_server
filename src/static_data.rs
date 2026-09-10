@@ -1,22 +1,21 @@
 use prost::bytes::Bytes;
-use std::sync::Arc;
 use std::{collections::HashMap, time::Duration};
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::mpsc;
 
 static MTA_GTFS_STATIC_SUPPLEMENTED_DOWNLOAD_ENDPOINT: &str =
     "https://rrgtfsfeeds.s3.amazonaws.com/gtfs_supplemented.zip";
 
 static MTA_1_TO_7_ENDPOINT: &str =
     "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs";
-static MTA_BDFM_ENDPOINT: &str =
-    "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-bdfm";
-static HUDSON_YARDS_STOP_NAME: &str = "34 St-Hudson Yards";
+// static MTA_BDFM_ENDPOINT: &str =
+// "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-bdfm";
+// static HUDSON_YARDS_STOP_NAME: &str = "34 St-Hudson Yards";
 static TIMES_SQUARE_STOP_NAME: &str = "Times Sq-42 St";
-static EAST_BROADWAY_STOP_NAME: &str = "East Broadway";
+// static EAST_BROADWAY_STOP_NAME: &str = "East Broadway";
 
-pub static TEST_ENDPOINT: &str = MTA_BDFM_ENDPOINT;
+pub static TEST_ENDPOINT: &str = MTA_1_TO_7_ENDPOINT;
 pub static TEST_STATIC_ENDPOINT: &str = MTA_GTFS_STATIC_SUPPLEMENTED_DOWNLOAD_ENDPOINT;
-pub static TEST_STOP_NAME: &str = EAST_BROADWAY_STOP_NAME;
+pub static TEST_STOP_NAME: &str = TIMES_SQUARE_STOP_NAME;
 
 pub struct StaticData {
     pub relevant_stop_ids: Vec<String>,
@@ -112,6 +111,7 @@ pub fn get_child_stop_ids_by_station_name(stops: &[Stop], stop_name: &str) -> Ve
     })
 }
 
+#[allow(unused)]
 #[derive(Debug, serde::Deserialize)]
 struct Route {
     route_id: String,
@@ -124,10 +124,4 @@ struct Route {
     route_color: String,
     route_text_color: String,
     route_sort_order: String,
-}
-
-#[derive(Debug, serde::Deserialize)]
-pub struct Trip {
-    trip_id: String,
-    trip_headsign: String,
 }
