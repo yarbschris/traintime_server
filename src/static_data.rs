@@ -1,5 +1,7 @@
-use std::collections::HashMap;
-use std::rc::Rc;
+use prost::bytes::Bytes;
+use std::sync::Arc;
+use std::{collections::HashMap, time::Duration};
+use tokio::sync::{Mutex, mpsc};
 
 static MTA_GTFS_STATIC_SUPPLEMENTED_DOWNLOAD_ENDPOINT: &str =
     "https://rrgtfsfeeds.s3.amazonaws.com/gtfs_supplemented.zip";
@@ -16,70 +18,96 @@ pub static TEST_ENDPOINT: &str = MTA_BDFM_ENDPOINT;
 pub static TEST_STATIC_ENDPOINT: &str = MTA_GTFS_STATIC_SUPPLEMENTED_DOWNLOAD_ENDPOINT;
 pub static TEST_STOP_NAME: &str = EAST_BROADWAY_STOP_NAME;
 
-/// Make a request to the endpoint which provides gtfs static data
-pub async fn fetch_gtfs_static_data() -> Result<prost::bytes::Bytes, reqwest::Error> {
-    println!("Fetching GTFS Static Data...");
-    let response = reqwest::get(TEST_STATIC_ENDPOINT).await?;
-    response.bytes().await
-}
-
 pub struct StaticData {
     pub relevant_stop_ids: Vec<String>,
-    pub header_lookup: HashMap<String, Rc<String>>,
+    pub header_lookup: HashMap<String, Arc<String>>,
 }
 
-pub fn parse_and_filter_gtfs_static_data(
-    bytes: prost::bytes::Bytes,
+pub async fn gtfs_static_handler(tx_static_data: mpsc::Sender<StaticData>) {
+    let (tx_static_bytes, rx_static_bytes) = mpsc::channel(2);
+    tokio::spawn(fetch_gtfs_static_data(tx_static_bytes));
+    tokio::spawn(parse_and_filter_gtfs_static_data(
+        tx_static_data,
+        rx_static_bytes,
+        TEST_STOP_NAME,
+    ));
+}
+
+/// Make a request to the endpoint which provides gtfs static data
+async fn fetch_gtfs_static_data(tx: mpsc::Sender<Bytes>) {
+    let mut gtfs_static_fetch_interval = tokio::time::interval(Duration::from_hours(1));
+    loop {
+        gtfs_static_fetch_interval.tick().await;
+        dbg!("Fetching GTFS Static Data...");
+        let response = reqwest::get(TEST_STATIC_ENDPOINT)
+            .await
+            .expect("Failed to fetch static data");
+        dbg!("Fetched GTFS Static Data!");
+        tx.send(response.bytes().await.unwrap()).await.unwrap();
+        dbg!("Sent static bytes");
+    }
+}
+
+async fn parse_and_filter_gtfs_static_data(
+    tx_static_data: mpsc::Sender<StaticData>,
+    mut rx_static_bytes: mpsc::Receiver<Bytes>,
     chosen_stop: &str,
-) -> StaticData {
-    let mut zip_reader = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+) {
+    while let Some(bytes) = rx_static_bytes.recv().await {
+        dbg!("Recieved static bytes");
+        let mut zip_reader = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
 
-    let mut rdr = csv::Reader::from_reader(zip_reader.by_name("stops.txt").unwrap());
-    println!("Deserializing Stop Data...");
-    let stops: Vec<Stop> = rdr.deserialize().collect::<Result<_, _>>().unwrap();
-    println!("Getting Stop IDs...");
-    let relevant_stop_ids = get_child_stop_ids_by_station_name(&stops, chosen_stop);
+        let mut rdr = csv::Reader::from_reader(zip_reader.by_name("stops.txt").unwrap());
+        dbg!("Deserializing Stop Data...");
+        let stops: Vec<Stop> = rdr.deserialize().collect::<Result<_, _>>().unwrap();
+        dbg!("Getting Stop IDs...");
+        let relevant_stop_ids = get_child_stop_ids_by_station_name(&stops, chosen_stop);
 
-    drop(rdr);
+        drop(rdr);
 
-    let mut rdr = csv::Reader::from_reader(zip_reader.by_name("trips.txt").unwrap());
-    println!("Deserializing Trips...");
-    let trips: Vec<Trip> = rdr.deserialize().collect::<Result<_, _>>().unwrap();
+        let mut rdr = csv::Reader::from_reader(zip_reader.by_name("trips.txt").unwrap());
+        dbg!("Deserializing Trips...");
+        let trips: Vec<Trip> = rdr.deserialize().collect::<Result<_, _>>().unwrap();
 
-    println!("Building lookup...");
-    let trip_headsigns: Vec<Rc<String>> = trips.iter().fold(Vec::new(), |mut acc, trip| {
-        if !acc
-            .iter()
-            .filter(|x| x.as_str() == trip.trip_headsign)
-            .collect::<Vec<&Rc<String>>>()
-            .is_empty()
-        {
-            acc
-        } else {
-            acc.push(Rc::new(trip.trip_headsign.to_string()));
-            acc
-        }
-    });
-
-    // TODO: Right now, some trips in a direction with only one endpoint do not specify the last
-    // three chars of trip_id, so a direct match doesn't always work (WTF WHY)
-    let mut header_lookup: HashMap<String, Rc<String>> =
-        trips.iter().fold(HashMap::new(), |mut acc, trip| {
-            let headsign_reference: &Rc<String> = trip_headsigns
+        dbg!("Building lookup...");
+        let trip_headsigns: Vec<Arc<String>> = trips.iter().fold(Vec::new(), |mut acc, trip| {
+            if !acc
                 .iter()
-                .find(|x| x.as_str() == trip.trip_headsign)
-                .unwrap();
-            acc.insert(
-                trip.trip_id.split_once('_').unwrap().1.to_string(),
-                Rc::clone(headsign_reference),
-            );
-            acc
+                .filter(|x| x.as_str() == trip.trip_headsign)
+                .collect::<Vec<&Arc<String>>>()
+                .is_empty()
+            {
+                acc
+            } else {
+                acc.push(Arc::new(trip.trip_headsign.to_string()));
+                acc
+            }
         });
-    header_lookup.insert("default".to_string(), Rc::new("Unknown".to_string()));
 
-    StaticData {
-        relevant_stop_ids,
-        header_lookup,
+        // TODO: Right now, some trips in a direction with only one endpoint do not specify the last
+        // three chars of trip_id, so a direct match doesn't always work (WTF WHY)
+        let mut header_lookup: HashMap<String, Arc<String>> =
+            trips.iter().fold(HashMap::new(), |mut acc, trip| {
+                let headsign_reference: &Arc<String> = trip_headsigns
+                    .iter()
+                    .find(|x| x.as_str() == trip.trip_headsign)
+                    .unwrap();
+                acc.insert(
+                    trip.trip_id.split_once('_').unwrap().1.to_string(),
+                    Arc::clone(headsign_reference),
+                );
+                acc
+            });
+        header_lookup.insert("default".to_string(), Arc::new("Unknown".to_string()));
+
+        dbg!("Sending Static Data");
+        tx_static_data
+            .send(StaticData {
+                relevant_stop_ids,
+                header_lookup,
+            })
+            .await
+            .unwrap()
     }
 }
 

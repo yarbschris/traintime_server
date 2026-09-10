@@ -1,41 +1,67 @@
 use gtfs_decode::transit_realtime::{FeedEntity, FeedMessage, trip_update::StopTimeUpdate};
 use reqwest::Response;
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::sync::{Mutex, mpsc};
 use tokio::time::{self, Duration};
 
-use crate::static_data::{StaticData, TEST_STOP_NAME};
+use crate::static_data::StaticData;
 
 pub mod static_data;
 
 #[tokio::main]
 async fn main() {
+    let active_static_data = Arc::new(Mutex::new(Some(StaticData {
+        relevant_stop_ids: vec![],
+        header_lookup: HashMap::new(),
+    })));
+
+    let (tx_static_data, rx_static_data) = mpsc::channel(2);
+
+    static_data::gtfs_static_handler(tx_static_data).await;
+
+    tokio::spawn(update_static_data_handler(
+        rx_static_data,
+        Arc::clone(&active_static_data),
+    ));
+
     let mut gtfs_rt_fetch_interval = time::interval(Duration::from_secs(30));
-    let static_data_bytes = static_data::fetch_gtfs_static_data().await.unwrap();
-    let static_data =
-        static_data::parse_and_filter_gtfs_static_data(static_data_bytes, TEST_STOP_NAME);
     loop {
         gtfs_rt_fetch_interval.tick().await;
-        if let Ok(response) = fetch_gtfs_rt().await {
-            if let Ok(decoded) = decode_gtfs_rt(response).await {
-                let entities = &decoded.entity;
-                let packets = entities
-                    .iter()
-                    .filter_map(|entity| feed_entity_to_packet(entity, &static_data))
-                    .collect::<Vec<TraintimePacket>>();
+        let Ok(response) = fetch_gtfs_rt().await else {
+            dbg!("Error Fetching GTFS-RT");
+            continue;
+        };
+        let Ok(decoded) = decode_gtfs_rt(response).await else {
+            dbg!("Error Decoding GTFS-RT");
+            continue;
+        };
+        let guard = active_static_data.lock().await;
+        let Some(static_data) = guard.as_ref() else {
+            continue;
+        };
+        let entities = &decoded.entity;
+        let packets = entities
+            .iter()
+            .filter_map(|entity| feed_entity_to_packet(entity, static_data))
+            .collect::<Vec<TraintimePacket>>();
 
-                for packet in &packets {
-                    println!("{}", packet)
-                }
-            } else {
-                println!(
-                    "Error Decoding gtfs-rt message. Please verify endpoint. Retrying in 30s..."
-                )
-            }
-        } else {
-            println!(
-                "Error trying to fetch gtfs-rt data. Please verify endpoint. Retrying in 30s..."
-            )
+        for packet in &packets {
+            println!("{}", packet)
         }
+    }
+}
+
+async fn update_static_data_handler(
+    mut rx_static_data: mpsc::Receiver<StaticData>,
+    old_data: Arc<Mutex<Option<StaticData>>>,
+) {
+    while let Some(new_data) = rx_static_data.recv().await {
+        dbg!("Recieved new static data");
+        let mut old_inner = old_data.lock().await;
+        old_inner.as_mut().unwrap().relevant_stop_ids = new_data.relevant_stop_ids;
+        old_inner.as_mut().unwrap().header_lookup = new_data.header_lookup;
     }
 }
 
@@ -63,7 +89,10 @@ fn feed_entity_to_packet(entity: &FeedEntity, static_data: &StaticData) -> Optio
         .collect::<Vec<&StopTimeUpdate>>()
         .into_iter()
         .next()?;
-    let arrival_time = next_update.arrival?.time?;
+    let arrival_time = next_update
+        .arrival
+        .and_then(|a| a.time)
+        .or_else(|| next_update.departure.and_then(|d| d.time))?;
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -103,19 +132,13 @@ fn feed_entity_to_packet(entity: &FeedEntity, static_data: &StaticData) -> Optio
             })
             .to_string(),
         mins_until_arrival: mins_until,
-        trip_id: entity.trip_update.as_ref()?.trip.trip_id.as_ref()?.clone(),
         delay: next_update.arrival?.delay,
     })
-}
-
-fn post_filtered_data() {
-    todo!();
 }
 
 struct TraintimePacket {
     route_id: String,
     stop_id: String,
-    trip_id: String,
     trip_headsign: String,
     mins_until_arrival: i64,
     delay: Option<i32>,
@@ -125,7 +148,7 @@ impl std::fmt::Display for TraintimePacket {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Line: {} bound {} to {}\nMinutes Until Arrival: {},\nDelay: {}\nTrip ID: {}\n",
+            "Line: {} bound {} to {}\nMinutes Until Arrival: {},\nDelay: {}\n",
             // TODO: This pattern is NYC Subway Specific
             match &self.stop_id[self.stop_id.len() - 1..] {
                 "S" => "Downtown",
@@ -136,7 +159,6 @@ impl std::fmt::Display for TraintimePacket {
             self.trip_headsign,
             self.mins_until_arrival,
             self.delay.unwrap_or(0),
-            self.trip_id,
         )
     }
 }
