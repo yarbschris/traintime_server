@@ -18,8 +18,41 @@ pub static TEST_STATIC_ENDPOINT: &str = MTA_GTFS_STATIC_SUPPLEMENTED_DOWNLOAD_EN
 pub static TEST_STOP_NAME: &str = TIMES_SQUARE_STOP_NAME;
 
 pub struct StaticData {
-    pub relevant_stop_ids: Vec<String>,
     pub stop_lookup: HashMap<String, String>, // stop_id -> stop_name
+}
+
+impl StaticData {
+    pub fn new() -> Self {
+        StaticData {
+            stop_lookup: HashMap::new(),
+        }
+    }
+
+    fn build_from_stops(mut stops: Vec<Stop>) -> StaticData {
+        stops.drain(..).fold(StaticData::new(), |mut acc, stop| {
+            acc.stop_lookup.insert(stop.stop_id, stop.stop_name);
+            acc
+        })
+    }
+
+    pub fn get_relevant_stops_to_station(&self, target_stop_name: &str) -> Vec<&String> {
+        self.stop_lookup
+            .iter()
+            .filter_map(|(stop_id, stop_name)| {
+                if stop_name == target_stop_name {
+                    Some(stop_id)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<&String>>()
+    }
+}
+
+impl Default for StaticData {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 pub async fn gtfs_static_handler(tx_static_data: mpsc::Sender<StaticData>) {
@@ -28,7 +61,6 @@ pub async fn gtfs_static_handler(tx_static_data: mpsc::Sender<StaticData>) {
     tokio::spawn(parse_and_filter_gtfs_static_data(
         tx_static_data,
         rx_static_bytes,
-        TEST_STOP_NAME,
     ));
 }
 
@@ -50,31 +82,19 @@ async fn fetch_gtfs_static_data(tx: mpsc::Sender<Bytes>) {
 async fn parse_and_filter_gtfs_static_data(
     tx_static_data: mpsc::Sender<StaticData>,
     mut rx_static_bytes: mpsc::Receiver<Bytes>,
-    chosen_stop: &str,
 ) {
     while let Some(bytes) = rx_static_bytes.recv().await {
         dbg!("Recieved static bytes");
         let mut zip_reader = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
-
         let mut rdr = csv::Reader::from_reader(zip_reader.by_name("stops.txt").unwrap());
         dbg!("Deserializing Stop Data...");
         let stops: Vec<Stop> = rdr.deserialize().collect::<Result<_, _>>().unwrap();
+        drop(rdr);
         dbg!("Getting Stop IDs...");
-        let relevant_stop_ids = get_child_stop_ids_by_station_name(&stops, chosen_stop);
-        dbg!("Building lookup...");
-
-        let stop_lookup = stops.iter().fold(HashMap::new(), |mut acc, stop| {
-            acc.insert(stop.stop_id.clone(), stop.stop_name.clone());
-            acc
-        });
+        dbg!("Building static data...");
+        let data_to_send = StaticData::build_from_stops(stops);
         dbg!("Sending Static Data");
-        tx_static_data
-            .send(StaticData {
-                relevant_stop_ids,
-                stop_lookup,
-            })
-            .await
-            .unwrap()
+        tx_static_data.send(data_to_send).await.unwrap()
     }
 }
 
