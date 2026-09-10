@@ -58,7 +58,7 @@ fn feed_entity_to_packet(entity: &FeedEntity, static_data: &StaticData) -> Optio
         .filter(|update| {
             static_data
                 .relevant_stop_ids
-                .contains(&&update.stop_id.as_ref().unwrap())
+                .contains(update.stop_id.as_ref().unwrap())
         })
         .collect::<Vec<&StopTimeUpdate>>()
         .into_iter()
@@ -78,15 +78,29 @@ fn feed_entity_to_packet(entity: &FeedEntity, static_data: &StaticData) -> Optio
         trip_headsign: static_data
             .header_lookup
             .get(entity.trip_update.as_ref()?.trip.trip_id.as_ref().unwrap())
-            .unwrap_or(&std::rc::Rc::new(
-                entity
-                    .trip_update
-                    .as_ref()
-                    .unwrap()
-                    .trip
-                    .trip_id()
-                    .to_string(),
-            ))
+            .unwrap_or_else(|| {
+                // TODO: Figure out a better way to work around NYC MTA's trip_id convention. This
+                // currently works as a backup when they drop the suffix of a trip_id
+                let binding = "default".to_string();
+                let key = static_data
+                    .header_lookup
+                    .keys()
+                    .find(|key| {
+                        key.contains(
+                            entity
+                                .trip_update
+                                .as_ref()
+                                .unwrap()
+                                .trip
+                                .trip_id
+                                .clone()
+                                .unwrap()
+                                .as_str(),
+                        )
+                    })
+                    .unwrap_or(&binding);
+                static_data.header_lookup.get(key).unwrap()
+            })
             .to_string(),
         mins_until_arrival: mins_until,
         trip_id: entity.trip_update.as_ref()?.trip.trip_id.as_ref()?.clone(),

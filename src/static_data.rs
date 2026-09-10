@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use csv::Reader;
-
 static MTA_GTFS_STATIC_SUPPLEMENTED_DOWNLOAD_ENDPOINT: &str =
     "https://rrgtfsfeeds.s3.amazonaws.com/gtfs_supplemented.zip";
 
@@ -18,9 +16,9 @@ pub static TEST_ENDPOINT: &str = MTA_BDFM_ENDPOINT;
 pub static TEST_STATIC_ENDPOINT: &str = MTA_GTFS_STATIC_SUPPLEMENTED_DOWNLOAD_ENDPOINT;
 pub static TEST_STOP_NAME: &str = EAST_BROADWAY_STOP_NAME;
 
-/// Make a request to the endpoint which provides gtfs static data, download the zip file
-/// data/nyc/subway/
+/// Make a request to the endpoint which provides gtfs static data
 pub async fn fetch_gtfs_static_data() -> Result<prost::bytes::Bytes, reqwest::Error> {
+    println!("Fetching GTFS Static Data...");
     let response = reqwest::get(TEST_STATIC_ENDPOINT).await?;
     response.bytes().await
 }
@@ -37,14 +35,18 @@ pub fn parse_and_filter_gtfs_static_data(
     let mut zip_reader = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
 
     let mut rdr = csv::Reader::from_reader(zip_reader.by_name("stops.txt").unwrap());
+    println!("Deserializing Stop Data...");
     let stops: Vec<Stop> = rdr.deserialize().collect::<Result<_, _>>().unwrap();
+    println!("Getting Stop IDs...");
     let relevant_stop_ids = get_child_stop_ids_by_station_name(&stops, chosen_stop);
 
     drop(rdr);
 
     let mut rdr = csv::Reader::from_reader(zip_reader.by_name("trips.txt").unwrap());
+    println!("Deserializing Trips...");
     let trips: Vec<Trip> = rdr.deserialize().collect::<Result<_, _>>().unwrap();
 
+    println!("Building lookup...");
     let trip_headsigns: Vec<Rc<String>> = trips.iter().fold(Vec::new(), |mut acc, trip| {
         if !acc
             .iter()
@@ -58,17 +60,14 @@ pub fn parse_and_filter_gtfs_static_data(
             acc
         }
     });
-    for x in &trip_headsigns {
-        println!("{}", x.as_str())
-    }
 
     // TODO: Right now, some trips in a direction with only one endpoint do not specify the last
     // three chars of trip_id, so a direct match doesn't always work (WTF WHY)
-    let header_lookup: HashMap<String, Rc<String>> =
+    let mut header_lookup: HashMap<String, Rc<String>> =
         trips.iter().fold(HashMap::new(), |mut acc, trip| {
             let headsign_reference: &Rc<String> = trip_headsigns
                 .iter()
-                .find(|x| x.as_str() == &trip.trip_headsign)
+                .find(|x| x.as_str() == trip.trip_headsign)
                 .unwrap();
             acc.insert(
                 trip.trip_id.split_once('_').unwrap().1.to_string(),
@@ -76,6 +75,7 @@ pub fn parse_and_filter_gtfs_static_data(
             );
             acc
         });
+    header_lookup.insert("default".to_string(), Rc::new("Unknown".to_string()));
 
     StaticData {
         relevant_stop_ids,
