@@ -12,3 +12,4 @@ prost = "0.14.4"
 csv = "1.4.0"
 serde = { version = "1.0.229", features = ["derive", "std"] }
 zip = "8.6.0"
+serde_yaml = "0.9.34"

@@ -5,17 +5,22 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex, mpsc};
 use tokio::time::{self, Duration};
 
+use crate::config::SupportedTransitSystem;
 use crate::static_data::StaticData;
 
+pub mod config;
 pub mod static_data;
 
 #[tokio::main]
 async fn main() {
+    let config =
+        config::TraintimeSystemConfig::read_config_by_system(SupportedTransitSystem::NycSubway);
+
     let active_static_data = Arc::new(Mutex::new(Some(StaticData::new())));
 
     let (tx_static_data, rx_static_data) = mpsc::channel(2);
 
-    static_data::gtfs_static_handler(tx_static_data).await;
+    static_data::gtfs_static_handler(tx_static_data, config.gtfs_static_endpoint).await;
 
     let (tx_new_static_data, mut rx_new_static_data) = mpsc::channel(1);
 
@@ -29,11 +34,11 @@ async fn main() {
     // Wait for first round of static data before entering loop
     // TODO: Later on, we will use this to signal new static data when stop preference changes
     rx_new_static_data.recv().await;
-    let mut gtfs_rt_fetch_interval = time::interval(Duration::from_secs(30));
 
+    let mut gtfs_rt_fetch_interval = time::interval(Duration::from_secs(30));
     loop {
         gtfs_rt_fetch_interval.tick().await;
-        let Ok(response) = fetch_gtfs_rt().await else {
+        let Ok(response) = fetch_gtfs_rt(&config.gtfs_rt_endpoints).await else {
             dbg!("Error Fetching GTFS-RT");
             continue;
         };
@@ -73,9 +78,9 @@ async fn update_static_data_handler(
     }
 }
 
-async fn fetch_gtfs_rt() -> Result<Response, reqwest::Error> {
+async fn fetch_gtfs_rt(gtfs_rt_endpoints: &[String]) -> Result<Response, reqwest::Error> {
     println!("Fetching MTA Subway Line Data...");
-    reqwest::get(static_data::TEST_ENDPOINT).await
+    reqwest::get(gtfs_rt_endpoints.get(0).unwrap()).await
 }
 
 async fn decode_gtfs_rt(response: Response) -> Result<FeedMessage, prost::DecodeError> {

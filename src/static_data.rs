@@ -2,19 +2,10 @@ use prost::bytes::Bytes;
 use std::{collections::HashMap, time::Duration};
 use tokio::sync::mpsc;
 
-static MTA_GTFS_STATIC_SUPPLEMENTED_DOWNLOAD_ENDPOINT: &str =
-    "https://rrgtfsfeeds.s3.amazonaws.com/gtfs_supplemented.zip";
-
-static MTA_1_TO_7_ENDPOINT: &str =
-    "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs";
-// static MTA_BDFM_ENDPOINT: &str =
-// "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fgtfs-bdfm";
 // static HUDSON_YARDS_STOP_NAME: &str = "34 St-Hudson Yards";
 static TIMES_SQUARE_STOP_NAME: &str = "Times Sq-42 St";
 // static EAST_BROADWAY_STOP_NAME: &str = "East Broadway";
 
-pub static TEST_ENDPOINT: &str = MTA_1_TO_7_ENDPOINT;
-pub static TEST_STATIC_ENDPOINT: &str = MTA_GTFS_STATIC_SUPPLEMENTED_DOWNLOAD_ENDPOINT;
 pub static TEST_STOP_NAME: &str = TIMES_SQUARE_STOP_NAME;
 
 pub struct StaticData {
@@ -55,9 +46,15 @@ impl Default for StaticData {
     }
 }
 
-pub async fn gtfs_static_handler(tx_static_data: mpsc::Sender<StaticData>) {
+pub async fn gtfs_static_handler(
+    tx_static_data: mpsc::Sender<StaticData>,
+    gtfs_static_endpoint: String,
+) {
     let (tx_static_bytes, rx_static_bytes) = mpsc::channel(2);
-    tokio::spawn(fetch_gtfs_static_data(tx_static_bytes));
+    tokio::spawn(fetch_gtfs_static_data(
+        tx_static_bytes,
+        gtfs_static_endpoint,
+    ));
     tokio::spawn(parse_and_filter_gtfs_static_data(
         tx_static_data,
         rx_static_bytes,
@@ -65,12 +62,12 @@ pub async fn gtfs_static_handler(tx_static_data: mpsc::Sender<StaticData>) {
 }
 
 /// Make a request to the endpoint which provides gtfs static data
-async fn fetch_gtfs_static_data(tx: mpsc::Sender<Bytes>) {
+async fn fetch_gtfs_static_data(tx: mpsc::Sender<Bytes>, gtfs_static_endpoint: String) {
     let mut gtfs_static_fetch_interval = tokio::time::interval(Duration::from_hours(1));
     loop {
         gtfs_static_fetch_interval.tick().await;
         dbg!("Fetching GTFS Static Data...");
-        let response = reqwest::get(TEST_STATIC_ENDPOINT)
+        let response = reqwest::get(&gtfs_static_endpoint)
             .await
             .expect("Failed to fetch static data");
         dbg!("Fetched GTFS Static Data!");
