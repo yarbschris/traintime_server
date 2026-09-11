@@ -1,8 +1,7 @@
 use gtfs_rt_decode::gtfs_rt_types::{FeedEntity, trip_update::StopTimeUpdate};
 use log::info;
-use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{mpsc, watch};
 use tokio::time::{self, Duration};
 
 use crate::config::SupportedTransitSystem;
@@ -18,50 +17,46 @@ async fn main() {
     let system_config =
         config::TraintimeSystemConfig::read_config_by_system(SupportedTransitSystem::NycSubway);
 
-    let active_static_data = Arc::new(Mutex::new(Some(StaticData::new())));
+    let (tx_active_static_data, mut rx_active_static_data) = watch::channel(StaticData::new());
 
     let (tx_static_data, rx_static_data) = mpsc::channel(1);
 
     static_data::gtfs_static_handler(tx_static_data, system_config.gtfs_static_endpoint.clone())
         .await;
 
-    let (tx_new_static_data, mut rx_new_static_data) = mpsc::channel(1);
-
     tokio::spawn(static_data::update_static_data_handler(
         rx_static_data,
-        tx_new_static_data,
-        Arc::clone(&active_static_data),
+        tx_active_static_data,
     ));
 
-    info!("Waiting to recieve static data");
-    // Wait for first round of static data before entering loop
-    rx_new_static_data.recv().await;
-
-    let guard = active_static_data.lock().await;
-    let fresh_static = guard.as_ref().unwrap();
+    let fresh_static = rx_active_static_data
+        .wait_for(|x| x.stop_lookup.len() > 1)
+        .await
+        .unwrap();
     let selected_station_config = config::SelectedStationConfig::build(
         static_data::TEST_STOP_NAME,
         &system_config,
         &fresh_static.route_lookup,
     )
     .await;
-    drop(guard);
+    drop(fresh_static);
 
     let mut gtfs_rt_fetch_interval = time::interval(Duration::from_secs(30));
     loop {
         gtfs_rt_fetch_interval.tick().await;
         let entities = rt_data::gtfs_rt_handler(&selected_station_config.relevant_endpoints).await;
-        let guard = active_static_data.lock().await;
-        let Some(static_data) = guard.as_ref() else {
-            continue;
-        };
+        let active_static_data = rx_active_static_data.borrow();
         let relevant_stop_ids =
-            static_data.get_relevant_stops_to_station(static_data::TEST_STOP_NAME);
+            active_static_data.get_relevant_stops_to_station(static_data::TEST_STOP_NAME);
 
         let packets = entities
             .iter()
-            .filter_map(|entity| feed_entity_to_packet(entity, static_data, &relevant_stop_ids))
+            .filter_map(|entity| {
+                feed_entity_to_packet(entity, &active_static_data, &relevant_stop_ids)
+            })
             .collect::<Vec<TraintimePacket>>();
+
+        info!("main loop: dropped mutex");
 
         for packet in &packets {
             println!("{}", packet)

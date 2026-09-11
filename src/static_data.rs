@@ -1,9 +1,8 @@
 use itertools::Itertools;
-use log::{info, trace};
+use log::info;
 use prost::bytes::Bytes;
-use std::sync::Arc;
 use std::{collections::HashMap, time::Duration};
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{mpsc, watch};
 
 static TIMES_SQUARE_STOP_NAME: &str = "Times Sq-42 St";
 pub static TEST_STOP_NAME: &str = TIMES_SQUARE_STOP_NAME;
@@ -71,30 +70,26 @@ pub async fn gtfs_static_handler(
 
 pub async fn update_static_data_handler(
     mut rx_static_data: mpsc::Receiver<StaticData>,
-    tx_new_static_data: mpsc::Sender<u8>,
-    old_data: Arc<Mutex<Option<StaticData>>>,
+    tx_active_static_data: watch::Sender<StaticData>,
 ) {
     while let Some(new_data) = rx_static_data.recv().await {
-        trace!("Recieved new static data");
-        let mut old_inner = old_data.lock().await;
-        old_inner.as_mut().unwrap().stop_lookup = new_data.stop_lookup;
-        old_inner.as_mut().unwrap().route_lookup = new_data.route_lookup;
-        tx_new_static_data.send(0).await.unwrap();
+        info!("Recieved new static data");
+        tx_active_static_data.send(new_data).unwrap();
     }
 }
 
 /// Make a request to the endpoint which provides gtfs static data
 async fn fetch_gtfs_static_data(tx: mpsc::Sender<Bytes>, gtfs_static_endpoint: String) {
-    let mut gtfs_static_fetch_interval = tokio::time::interval(Duration::from_hours(1));
+    let mut gtfs_static_fetch_interval = tokio::time::interval(Duration::from_mins(1));
     loop {
         gtfs_static_fetch_interval.tick().await;
-        trace!("Fetching GTFS Static Data...");
+        info!("Fetching GTFS Static Data...");
         let response = reqwest::get(&gtfs_static_endpoint)
             .await
             .expect("Failed to fetch static data");
         info!("Fetched GTFS Static Data!");
         tx.send(response.bytes().await.unwrap()).await.unwrap();
-        trace!("Sent static bytes");
+        info!("Sent static bytes");
     }
 }
 
@@ -103,7 +98,7 @@ async fn parse_and_filter_gtfs_static_data(
     mut rx_static_bytes: mpsc::Receiver<Bytes>,
 ) {
     while let Some(bytes) = rx_static_bytes.recv().await {
-        trace!("Recieved static bytes");
+        info!("Recieved static bytes");
         let mut zip_reader = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
         let mut rdr = csv::Reader::from_reader(zip_reader.by_name("stops.txt").unwrap());
 
@@ -123,7 +118,7 @@ async fn parse_and_filter_gtfs_static_data(
         info!("Building static data...");
         let data_to_send = StaticData::build_from_static_data(stops, trips, stop_times);
 
-        trace!("Sending Static Data");
+        info!("Sending Static Data");
         tx_static_data.send(data_to_send).await.unwrap()
     }
 }
