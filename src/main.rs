@@ -1,7 +1,7 @@
 use gtfs_rt_decode::gtfs_rt_types::{FeedEntity, trip_update::StopTimeUpdate};
 use log::info;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::watch;
 use tokio::time::{self, Duration};
 
 use crate::config::SupportedTransitSystem;
@@ -19,20 +19,18 @@ async fn main() {
 
     let (tx_active_static_data, mut rx_active_static_data) = watch::channel(StaticData::new());
 
-    let (tx_static_data, rx_static_data) = mpsc::channel(1);
-
-    static_data::gtfs_static_handler(tx_static_data, system_config.gtfs_static_endpoint.clone())
-        .await;
-
-    tokio::spawn(static_data::update_static_data_handler(
-        rx_static_data,
+    static_data::setup_gtfs_static(
         tx_active_static_data,
-    ));
+        system_config.gtfs_static_endpoint.clone(),
+    )
+    .await;
 
+    info!("Waiting for new gtfs static data");
     let fresh_static = rx_active_static_data
         .wait_for(|x| x.stop_lookup.len() > 1)
         .await
         .unwrap();
+    info!("Got new gtfs static data");
     let selected_station_config = config::SelectedStationConfig::build(
         static_data::TEST_STOP_NAME,
         &system_config,

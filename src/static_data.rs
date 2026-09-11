@@ -53,15 +53,31 @@ impl Default for StaticData {
     }
 }
 
-pub async fn gtfs_static_handler(
+pub async fn setup_gtfs_static(
+    tx_active_static_data: watch::Sender<StaticData>,
+    gtfs_static_endpoint: String,
+) {
+    let (tx_new_static_data, rx_new_static_data) = mpsc::channel(1);
+
+    fetch_static_handler(tx_new_static_data, gtfs_static_endpoint).await;
+
+    tokio::spawn(update_static_data_handler(
+        rx_new_static_data,
+        tx_active_static_data,
+    ));
+}
+
+pub async fn fetch_static_handler(
     tx_static_data: mpsc::Sender<StaticData>,
     gtfs_static_endpoint: String,
 ) {
     let (tx_static_bytes, rx_static_bytes) = mpsc::channel(2);
+
     tokio::spawn(fetch_gtfs_static_data(
         tx_static_bytes,
         gtfs_static_endpoint,
     ));
+
     tokio::spawn(parse_and_filter_gtfs_static_data(
         tx_static_data,
         rx_static_bytes,
@@ -69,12 +85,13 @@ pub async fn gtfs_static_handler(
 }
 
 pub async fn update_static_data_handler(
-    mut rx_static_data: mpsc::Receiver<StaticData>,
+    mut rx_new_static_data: mpsc::Receiver<StaticData>,
     tx_active_static_data: watch::Sender<StaticData>,
 ) {
-    while let Some(new_data) = rx_static_data.recv().await {
+    while let Some(new_data) = rx_new_static_data.recv().await {
         info!("Recieved new static data");
         tx_active_static_data.send(new_data).unwrap();
+        info!("Sent new static data")
     }
 }
 
