@@ -18,7 +18,7 @@ async fn main() {
 
     let active_static_data = Arc::new(Mutex::new(Some(StaticData::new())));
 
-    let (tx_static_data, rx_static_data) = mpsc::channel(2);
+    let (tx_static_data, rx_static_data) = mpsc::channel(1);
 
     static_data::gtfs_static_handler(tx_static_data, system_config.gtfs_static_endpoint.clone())
         .await;
@@ -33,7 +33,6 @@ async fn main() {
 
     dbg!("Waiting to recieve static data");
     // Wait for first round of static data before entering loop
-    // TODO: Later on, we will use this to signal new static data when stop preference changes
     rx_new_static_data.recv().await;
 
     let guard = active_static_data.lock().await;

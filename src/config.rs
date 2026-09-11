@@ -39,9 +39,8 @@ impl SelectedStationConfig {
         let relevant_routes = route_lookup.get(station_name).unwrap();
         let mut relevant_endpoints = Vec::new();
         for endpoint in &system_config.gtfs_rt_endpoints {
-            let response = rt_data::fetch_gtfs_rt(endpoint.as_str()).await.unwrap();
-            let feed = rt_data::decode_gtfs_rt(response).await.unwrap();
-            for route in rt_data::accumulate_routes(feed) {
+            let decoded_entities = rt_data::fetch_and_decode_gtfs_rt(endpoint.clone()).await;
+            for route in rt_data::accumulate_entities_routes(decoded_entities) {
                 if relevant_routes.contains(&route) {
                     relevant_endpoints.push(endpoint.clone());
                     break;

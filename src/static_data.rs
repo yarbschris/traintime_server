@@ -4,10 +4,7 @@ use std::sync::Arc;
 use std::{collections::HashMap, time::Duration};
 use tokio::sync::{Mutex, mpsc};
 
-// static HUDSON_YARDS_STOP_NAME: &str = "34 St-Hudson Yards";
 static TIMES_SQUARE_STOP_NAME: &str = "Times Sq-42 St";
-// static EAST_BROADWAY_STOP_NAME: &str = "East Broadway";
-
 pub static TEST_STOP_NAME: &str = TIMES_SQUARE_STOP_NAME;
 
 pub struct StaticData {
