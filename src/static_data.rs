@@ -1,3 +1,4 @@
+use itertools::Itertools;
 use prost::bytes::Bytes;
 use std::{collections::HashMap, time::Duration};
 use tokio::sync::mpsc;
@@ -10,20 +11,28 @@ pub static TEST_STOP_NAME: &str = TIMES_SQUARE_STOP_NAME;
 
 pub struct StaticData {
     pub stop_lookup: HashMap<String, String>, // stop_id -> stop_name
+    pub route_lookup: HashMap<String, Vec<String>>,
 }
 
 impl StaticData {
     pub fn new() -> Self {
         StaticData {
             stop_lookup: HashMap::new(),
+            route_lookup: HashMap::new(),
         }
     }
 
-    fn build_from_stops(mut stops: Vec<Stop>) -> StaticData {
-        stops.drain(..).fold(StaticData::new(), |mut acc, stop| {
-            acc.stop_lookup.insert(stop.stop_id, stop.stop_name);
-            acc
-        })
+    fn build_from_static_data(
+        stops: Vec<Stop>,
+        trips: Vec<Trip>,
+        stop_times: Vec<StopTime>,
+    ) -> Self {
+        let stop_lookup = build_stop_lookup(stops);
+        let route_lookup = build_route_lookup(stop_times, trips, &stop_lookup);
+        StaticData {
+            stop_lookup,
+            route_lookup,
+        }
     }
 
     pub fn get_relevant_stops_to_station(&self, target_stop_name: &str) -> Vec<&String> {
@@ -84,12 +93,23 @@ async fn parse_and_filter_gtfs_static_data(
         dbg!("Recieved static bytes");
         let mut zip_reader = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
         let mut rdr = csv::Reader::from_reader(zip_reader.by_name("stops.txt").unwrap());
+
         dbg!("Deserializing Stop Data...");
         let stops: Vec<Stop> = rdr.deserialize().collect::<Result<_, _>>().unwrap();
         drop(rdr);
-        dbg!("Getting Stop IDs...");
+
+        dbg!("Deserializing Trip Data...");
+        let mut rdr = csv::Reader::from_reader(zip_reader.by_name("trips.txt").unwrap());
+        let trips: Vec<Trip> = rdr.deserialize().collect::<Result<_, _>>().unwrap();
+        drop(rdr);
+
+        dbg!("Deserializing StopTime Data...");
+        let mut rdr = csv::Reader::from_reader(zip_reader.by_name("stop_times.txt").unwrap());
+        let stop_times: Vec<StopTime> = rdr.deserialize().collect::<Result<_, _>>().unwrap();
+
         dbg!("Building static data...");
-        let data_to_send = StaticData::build_from_stops(stops);
+        let data_to_send = StaticData::build_from_static_data(stops, trips, stop_times);
+
         dbg!("Sending Static Data");
         tx_static_data.send(data_to_send).await.unwrap()
     }
@@ -100,6 +120,17 @@ pub struct Stop {
     stop_id: String,
     pub stop_name: String,
     parent_station: String,
+}
+
+fn build_stop_lookup(mut stops: Vec<Stop>) -> HashMap<String, String> {
+    dbg!("Building Stop Lookup");
+    stops.drain(..).fold(HashMap::new(), |mut acc, stop| {
+        if stop.parent_station.is_empty() {
+            return acc;
+        }
+        acc.insert(stop.stop_id, stop.stop_name);
+        acc
+    })
 }
 
 pub fn get_unique_station_names(stops: &[Stop]) -> Vec<&String> {
@@ -114,9 +145,6 @@ pub fn get_unique_station_names(stops: &[Stop]) -> Vec<&String> {
 }
 
 // Given a station name, get all stop ids where parent field is not none (a child station)
-// TODO: This works for NYC Subway specifically because child subway stop ids
-// indicate the direction in which the train is moving. I have no clue whether relevent
-// stations in other systems follow the same pattern
 pub fn get_child_stop_ids_by_station_name(stops: &[Stop], stop_name: &str) -> Vec<String> {
     stops.iter().fold(Vec::new(), |mut acc, stop| {
         if stop.stop_name == stop_name && !stop.parent_station.is_empty() {
@@ -126,6 +154,73 @@ pub fn get_child_stop_ids_by_station_name(stops: &[Stop], stop_name: &str) -> Ve
             acc
         }
     })
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct Trip {
+    route_id: String,
+    trip_id: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct StopTime {
+    trip_id: String,
+    stop_id: String,
+}
+
+fn build_route_lookup(
+    mut stop_times: Vec<StopTime>,
+    mut trips: Vec<Trip>,
+    stop_lookup: &HashMap<String, String>,
+) -> HashMap<String, Vec<String>> {
+    // For stop_times, first build a mapping of stop_id -> vector of trip_ids
+    dbg!("Building StopTime Map");
+    let mut stops_map: HashMap<String, Vec<String>> =
+        stop_times.drain(..).fold(HashMap::new(), |mut acc, trip| {
+            if let Some(vec) = acc.get_mut(&trip.stop_id) {
+                vec.push(trip.trip_id);
+                acc
+            } else {
+                acc.insert(trip.stop_id, vec![trip.trip_id]);
+                acc
+            }
+        });
+
+    // For trips, build a mapping of trip_id -> route_id
+    dbg!("Building Trip Map");
+    let trips_map: HashMap<String, String> =
+        trips.drain(..).fold(HashMap::new(), |mut acc, stop_time| {
+            acc.insert(stop_time.trip_id, stop_time.route_id);
+            acc
+        });
+
+    // Finally, build a lookup table of station_name -> vec of route_id
+    dbg!("Combining StopTime Map and Trip Map into Route Lookup");
+    stops_map.drain().fold(
+        HashMap::new(),
+        |mut acc: HashMap<String, Vec<String>>, (stop_id, trip_ids)| {
+            let key = stop_lookup.get(&stop_id).unwrap();
+            let values = trip_ids
+                .iter()
+                .filter_map(|trip_id| {
+                    let x = trips_map.get(trip_id)?;
+                    Some(x.clone())
+                })
+                .unique()
+                .collect::<Vec<String>>();
+            if let Some(vec) = acc.get_mut(key) {
+                for value in &values {
+                    if vec.contains(value) {
+                        return acc;
+                    }
+                }
+                vec.extend(values);
+            } else {
+                acc.insert(key.clone(), values);
+            }
+            acc
+        },
+    )
 }
 
 #[allow(unused)]

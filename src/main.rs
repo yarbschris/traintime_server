@@ -62,6 +62,9 @@ async fn main() {
         for packet in &packets {
             println!("{}", packet)
         }
+        for lookup in &static_data.route_lookup {
+            dbg!(lookup);
+        }
     }
 }
 
@@ -74,6 +77,7 @@ async fn update_static_data_handler(
         dbg!("Recieved new static data");
         let mut old_inner = old_data.lock().await;
         old_inner.as_mut().unwrap().stop_lookup = new_data.stop_lookup;
+        old_inner.as_mut().unwrap().route_lookup = new_data.route_lookup;
         tx_new_static_data.send(0).await.unwrap();
     }
 }
