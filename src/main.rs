@@ -49,21 +49,11 @@ async fn main() {
     let mut gtfs_rt_fetch_interval = time::interval(Duration::from_secs(30));
     loop {
         gtfs_rt_fetch_interval.tick().await;
-        let Ok(response) =
-            rt_data::fetch_gtfs_rt(&system_config.gtfs_rt_endpoints.get(0).unwrap()).await
-        else {
-            dbg!("Error Fetching GTFS-RT");
-            continue;
-        };
-        let Ok(decoded) = rt_data::decode_gtfs_rt(response).await else {
-            dbg!("Error Decoding GTFS-RT");
-            continue;
-        };
+        let entities = rt_data::gtfs_rt_handler(&selected_station_config.relevant_endpoints).await;
         let guard = active_static_data.lock().await;
         let Some(static_data) = guard.as_ref() else {
             continue;
         };
-        let entities = &decoded.entity;
         let relevant_stop_ids =
             static_data.get_relevant_stops_to_station(static_data::TEST_STOP_NAME);
 
