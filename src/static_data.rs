@@ -1,4 +1,5 @@
 use itertools::Itertools;
+use log::{info, trace};
 use prost::bytes::Bytes;
 use std::sync::Arc;
 use std::{collections::HashMap, time::Duration};
@@ -74,7 +75,7 @@ pub async fn update_static_data_handler(
     old_data: Arc<Mutex<Option<StaticData>>>,
 ) {
     while let Some(new_data) = rx_static_data.recv().await {
-        dbg!("Recieved new static data");
+        trace!("Recieved new static data");
         let mut old_inner = old_data.lock().await;
         old_inner.as_mut().unwrap().stop_lookup = new_data.stop_lookup;
         old_inner.as_mut().unwrap().route_lookup = new_data.route_lookup;
@@ -87,13 +88,13 @@ async fn fetch_gtfs_static_data(tx: mpsc::Sender<Bytes>, gtfs_static_endpoint: S
     let mut gtfs_static_fetch_interval = tokio::time::interval(Duration::from_hours(1));
     loop {
         gtfs_static_fetch_interval.tick().await;
-        dbg!("Fetching GTFS Static Data...");
+        trace!("Fetching GTFS Static Data...");
         let response = reqwest::get(&gtfs_static_endpoint)
             .await
             .expect("Failed to fetch static data");
-        dbg!("Fetched GTFS Static Data!");
+        info!("Fetched GTFS Static Data!");
         tx.send(response.bytes().await.unwrap()).await.unwrap();
-        dbg!("Sent static bytes");
+        trace!("Sent static bytes");
     }
 }
 
@@ -102,27 +103,27 @@ async fn parse_and_filter_gtfs_static_data(
     mut rx_static_bytes: mpsc::Receiver<Bytes>,
 ) {
     while let Some(bytes) = rx_static_bytes.recv().await {
-        dbg!("Recieved static bytes");
+        trace!("Recieved static bytes");
         let mut zip_reader = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
         let mut rdr = csv::Reader::from_reader(zip_reader.by_name("stops.txt").unwrap());
 
-        dbg!("Deserializing Stop Data...");
+        info!("Deserializing Stop Data...");
         let stops: Vec<Stop> = rdr.deserialize().collect::<Result<_, _>>().unwrap();
         drop(rdr);
 
-        dbg!("Deserializing Trip Data...");
+        info!("Deserializing Trip Data...");
         let mut rdr = csv::Reader::from_reader(zip_reader.by_name("trips.txt").unwrap());
         let trips: Vec<Trip> = rdr.deserialize().collect::<Result<_, _>>().unwrap();
         drop(rdr);
 
-        dbg!("Deserializing StopTime Data...");
+        info!("Deserializing StopTime Data...");
         let mut rdr = csv::Reader::from_reader(zip_reader.by_name("stop_times.txt").unwrap());
         let stop_times: Vec<StopTime> = rdr.deserialize().collect::<Result<_, _>>().unwrap();
 
-        dbg!("Building static data...");
+        info!("Building static data...");
         let data_to_send = StaticData::build_from_static_data(stops, trips, stop_times);
 
-        dbg!("Sending Static Data");
+        trace!("Sending Static Data");
         tx_static_data.send(data_to_send).await.unwrap()
     }
 }
@@ -135,7 +136,7 @@ pub struct Stop {
 }
 
 fn build_stop_lookup(mut stops: Vec<Stop>) -> HashMap<String, String> {
-    dbg!("Building Stop Lookup");
+    info!("Building Stop Lookup");
     stops.drain(..).fold(HashMap::new(), |mut acc, stop| {
         if stop.parent_station.is_empty() {
             return acc;
@@ -186,7 +187,7 @@ fn build_route_lookup(
     stop_lookup: &HashMap<String, String>,
 ) -> HashMap<String, Vec<String>> {
     // For stop_times, first build a mapping of stop_id -> vector of trip_ids
-    dbg!("Building StopTime Map");
+    info!("Building StopTime Map");
     let mut stops_map: HashMap<String, Vec<String>> =
         stop_times.drain(..).fold(HashMap::new(), |mut acc, trip| {
             if let Some(vec) = acc.get_mut(&trip.stop_id) {
@@ -199,7 +200,7 @@ fn build_route_lookup(
         });
 
     // For trips, build a mapping of trip_id -> route_id
-    dbg!("Building Trip Map");
+    info!("Building Trip Map");
     let trips_map: HashMap<String, String> =
         trips.drain(..).fold(HashMap::new(), |mut acc, stop_time| {
             acc.insert(stop_time.trip_id, stop_time.route_id);
@@ -207,7 +208,7 @@ fn build_route_lookup(
         });
 
     // Finally, build a lookup table of station_name -> vec of route_id
-    dbg!("Combining StopTime Map and Trip Map into Route Lookup");
+    info!("Combining StopTime Map and Trip Map into Route Lookup");
     stops_map.drain().fold(
         HashMap::new(),
         |mut acc: HashMap<String, Vec<String>>, (stop_id, trip_ids)| {

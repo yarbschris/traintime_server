@@ -1,4 +1,5 @@
 use gtfs_rt_decode::gtfs_rt_types::{FeedEntity, trip_update::StopTimeUpdate};
+use log::info;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex, mpsc};
@@ -13,6 +14,7 @@ pub mod static_data;
 
 #[tokio::main]
 async fn main() {
+    colog::init();
     let system_config =
         config::TraintimeSystemConfig::read_config_by_system(SupportedTransitSystem::NycSubway);
 
@@ -31,7 +33,7 @@ async fn main() {
         Arc::clone(&active_static_data),
     ));
 
-    dbg!("Waiting to recieve static data");
+    info!("Waiting to recieve static data");
     // Wait for first round of static data before entering loop
     rx_new_static_data.recv().await;
 
