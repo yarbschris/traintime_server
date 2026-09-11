@@ -1,4 +1,4 @@
-use gtfs_decode::transit_realtime::{FeedEntity, trip_update::StopTimeUpdate};
+use gtfs_rt_decode::gtfs_rt_types::{FeedEntity, trip_update::StopTimeUpdate};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex, mpsc};

@@ -7,7 +7,7 @@ edition = "2024"
 tokio = { version = "1.53.1", features = ["full"] }
 reqwest = "0.13.4"
 postcard = "1.1.3"
-gtfs_decode = { path = "../gtfs_decode/" }
+gtfs_rt_decode = "0.1.0"
 prost = "0.14.4"
 csv = "1.4.0"
 serde = { version = "1.0.229", features = ["derive", "std"] }

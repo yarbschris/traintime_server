@@ -1,5 +1,5 @@
 use futures::future::join_all;
-use gtfs_decode::transit_realtime::{FeedEntity, FeedMessage};
+use gtfs_rt_decode::gtfs_rt_types::{FeedEntity, FeedMessage};
 use reqwest::Response;
 
 // For each endpoint, make a request. Put feed messages together, and return
@@ -29,7 +29,7 @@ async fn fetch_gtfs_rt(gtfs_rt_endpoint: &str) -> Result<Response, reqwest::Erro
 
 async fn decode_gtfs_rt(response: Response) -> Result<FeedMessage, prost::DecodeError> {
     let response_bytes = response.bytes().await.unwrap();
-    <FeedMessage as prost::Message>::decode(response_bytes)
+    gtfs_rt_decode::decode::from_bytes(response_bytes)
 }
 
 pub fn accumulate_entities_routes(mut entities: Vec<FeedEntity>) -> Vec<String> {
