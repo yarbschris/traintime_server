@@ -1,6 +1,8 @@
 use crate::rt_data;
-use serde_yaml;
+use serde_norway;
 use std::collections::HashMap;
+
+const NYC_SUBWAY_CONFIG_PATH: &str = include_str!("../system_configs/nyc_subway.yml");
 
 #[derive(Debug, serde::Deserialize)]
 pub struct TraintimeSystemConfig {
@@ -9,18 +11,17 @@ pub struct TraintimeSystemConfig {
 }
 
 impl TraintimeSystemConfig {
-    fn read_from_config_file(path: &str) -> TraintimeSystemConfig {
-        let file = std::fs::File::open(path).unwrap();
-        let config: TraintimeSystemConfig = serde_yaml::from_reader(file).unwrap();
-        config
+    fn parse_config(config: &str) -> TraintimeSystemConfig {
+        let parsed_config: TraintimeSystemConfig = serde_norway::from_str(config).unwrap();
+        parsed_config
     }
 
     pub fn read_config_by_system(system: SupportedTransitSystem) -> TraintimeSystemConfig {
-        let path = match system {
-            SupportedTransitSystem::NycSubway => "system_configs/nyc_subway.yml",
+        let config = match system {
+            SupportedTransitSystem::NycSubway => NYC_SUBWAY_CONFIG_PATH,
         };
 
-        TraintimeSystemConfig::read_from_config_file(path)
+        TraintimeSystemConfig::parse_config(config)
     }
 }
 
