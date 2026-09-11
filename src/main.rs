@@ -1,5 +1,4 @@
-use gtfs_decode::transit_realtime::{FeedEntity, FeedMessage, trip_update::StopTimeUpdate};
-use reqwest::Response;
+use gtfs_decode::transit_realtime::{FeedEntity, trip_update::StopTimeUpdate};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex, mpsc};
@@ -9,22 +8,24 @@ use crate::config::SupportedTransitSystem;
 use crate::static_data::StaticData;
 
 pub mod config;
+pub mod rt_data;
 pub mod static_data;
 
 #[tokio::main]
 async fn main() {
-    let config =
+    let system_config =
         config::TraintimeSystemConfig::read_config_by_system(SupportedTransitSystem::NycSubway);
 
     let active_static_data = Arc::new(Mutex::new(Some(StaticData::new())));
 
     let (tx_static_data, rx_static_data) = mpsc::channel(2);
 
-    static_data::gtfs_static_handler(tx_static_data, config.gtfs_static_endpoint).await;
+    static_data::gtfs_static_handler(tx_static_data, system_config.gtfs_static_endpoint.clone())
+        .await;
 
     let (tx_new_static_data, mut rx_new_static_data) = mpsc::channel(1);
 
-    tokio::spawn(update_static_data_handler(
+    tokio::spawn(static_data::update_static_data_handler(
         rx_static_data,
         tx_new_static_data,
         Arc::clone(&active_static_data),
@@ -35,14 +36,26 @@ async fn main() {
     // TODO: Later on, we will use this to signal new static data when stop preference changes
     rx_new_static_data.recv().await;
 
+    let guard = active_static_data.lock().await;
+    let fresh_static = guard.as_ref().unwrap();
+    let selected_station_config = config::SelectedStationConfig::build(
+        static_data::TEST_STOP_NAME,
+        &system_config,
+        &fresh_static.route_lookup,
+    )
+    .await;
+    drop(guard);
+
     let mut gtfs_rt_fetch_interval = time::interval(Duration::from_secs(30));
     loop {
         gtfs_rt_fetch_interval.tick().await;
-        let Ok(response) = fetch_gtfs_rt(&config.gtfs_rt_endpoints).await else {
+        let Ok(response) =
+            rt_data::fetch_gtfs_rt(&system_config.gtfs_rt_endpoints.get(0).unwrap()).await
+        else {
             dbg!("Error Fetching GTFS-RT");
             continue;
         };
-        let Ok(decoded) = decode_gtfs_rt(response).await else {
+        let Ok(decoded) = rt_data::decode_gtfs_rt(response).await else {
             dbg!("Error Decoding GTFS-RT");
             continue;
         };
@@ -62,34 +75,7 @@ async fn main() {
         for packet in &packets {
             println!("{}", packet)
         }
-        for lookup in &static_data.route_lookup {
-            dbg!(lookup);
-        }
     }
-}
-
-async fn update_static_data_handler(
-    mut rx_static_data: mpsc::Receiver<StaticData>,
-    tx_new_static_data: mpsc::Sender<u8>,
-    old_data: Arc<Mutex<Option<StaticData>>>,
-) {
-    while let Some(new_data) = rx_static_data.recv().await {
-        dbg!("Recieved new static data");
-        let mut old_inner = old_data.lock().await;
-        old_inner.as_mut().unwrap().stop_lookup = new_data.stop_lookup;
-        old_inner.as_mut().unwrap().route_lookup = new_data.route_lookup;
-        tx_new_static_data.send(0).await.unwrap();
-    }
-}
-
-async fn fetch_gtfs_rt(gtfs_rt_endpoints: &[String]) -> Result<Response, reqwest::Error> {
-    println!("Fetching MTA Subway Line Data...");
-    reqwest::get(gtfs_rt_endpoints.get(0).unwrap()).await
-}
-
-async fn decode_gtfs_rt(response: Response) -> Result<FeedMessage, prost::DecodeError> {
-    let response_bytes = response.bytes().await.unwrap();
-    <FeedMessage as prost::Message>::decode(response_bytes)
 }
 
 fn feed_entity_to_packet(

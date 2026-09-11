@@ -1,7 +1,8 @@
 use itertools::Itertools;
 use prost::bytes::Bytes;
+use std::sync::Arc;
 use std::{collections::HashMap, time::Duration};
-use tokio::sync::mpsc;
+use tokio::sync::{Mutex, mpsc};
 
 // static HUDSON_YARDS_STOP_NAME: &str = "34 St-Hudson Yards";
 static TIMES_SQUARE_STOP_NAME: &str = "Times Sq-42 St";
@@ -68,6 +69,20 @@ pub async fn gtfs_static_handler(
         tx_static_data,
         rx_static_bytes,
     ));
+}
+
+pub async fn update_static_data_handler(
+    mut rx_static_data: mpsc::Receiver<StaticData>,
+    tx_new_static_data: mpsc::Sender<u8>,
+    old_data: Arc<Mutex<Option<StaticData>>>,
+) {
+    while let Some(new_data) = rx_static_data.recv().await {
+        dbg!("Recieved new static data");
+        let mut old_inner = old_data.lock().await;
+        old_inner.as_mut().unwrap().stop_lookup = new_data.stop_lookup;
+        old_inner.as_mut().unwrap().route_lookup = new_data.route_lookup;
+        tx_new_static_data.send(0).await.unwrap();
+    }
 }
 
 /// Make a request to the endpoint which provides gtfs static data
