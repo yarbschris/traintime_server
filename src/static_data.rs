@@ -97,7 +97,7 @@ pub async fn update_static_data_handler(
 
 /// Make a request to the endpoint which provides gtfs static data
 async fn fetch_gtfs_static_data(tx: mpsc::Sender<Bytes>, gtfs_static_endpoint: String) {
-    let mut gtfs_static_fetch_interval = tokio::time::interval(Duration::from_mins(1));
+    let mut gtfs_static_fetch_interval = tokio::time::interval(Duration::from_hours(2));
     loop {
         gtfs_static_fetch_interval.tick().await;
         info!("Fetching GTFS Static Data...");

@@ -1,5 +1,6 @@
 use crate::{rt_data, static_data::StaticData};
 use futures::future::join_all;
+use log::info;
 use serde_norway;
 use std::collections::HashMap;
 use tokio::sync::watch;
@@ -40,6 +41,7 @@ pub async fn update_endpoints_on_static_data_update(
     tx_station_config: watch::Sender<SelectedStationConfig>,
 ) {
     while rx_active_static_data.changed().await.is_ok() {
+        info!("Updating relevant endpoints");
         let relevant_routes = {
             let station_config = tx_station_config.borrow();
             let static_data = rx_active_static_data.borrow_and_update();
@@ -61,6 +63,7 @@ pub async fn update_endpoints_on_static_data_update(
             .flatten()
             .collect::<Vec<String>>();
         tx_station_config.send_modify(|x| x.relevant_endpoints = relevant_endpoints);
+        info!("Updated relevant endpoints");
     }
 }
 

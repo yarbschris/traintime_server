@@ -17,7 +17,7 @@ async fn main() {
     let system_config =
         config::TraintimeSystemConfig::read_config_by_system(SupportedTransitSystem::NycSubway);
 
-    let (tx_active_static_data, mut rx_active_static_data) = watch::channel(StaticData::new());
+    let (tx_active_static_data, rx_active_static_data) = watch::channel(StaticData::new());
     let (tx_station_config, mut rx_station_config) =
         watch::channel(config::SelectedStationConfig::new());
     //
@@ -29,14 +29,6 @@ async fn main() {
         system_config.gtfs_static_endpoint.clone(),
     )
     .await;
-
-    // We need static data to render station options, so we should just block all station
-    // config until static data is set up
-    info!("Waiting for static data to be built...");
-    rx_active_static_data
-        .wait_for(|static_data| !static_data.stop_lookup.is_empty())
-        .await
-        .unwrap();
 
     tokio::spawn(config::update_endpoints_on_static_data_update(
         system_config,
