@@ -18,6 +18,11 @@ async fn main() {
         config::TraintimeSystemConfig::read_config_by_system(SupportedTransitSystem::NycSubway);
 
     let (tx_active_static_data, mut rx_active_static_data) = watch::channel(StaticData::new());
+    let (tx_station_config, mut rx_station_config) =
+        watch::channel(config::SelectedStationConfig::new());
+    //
+    // TODO: We want to dynamically change station name, rn we just set it manually
+    tx_station_config.send_modify(|x| x.station_name = String::from("East Broadway"));
 
     static_data::setup_gtfs_static(
         tx_active_static_data,
@@ -25,27 +30,49 @@ async fn main() {
     )
     .await;
 
-    info!("Waiting for new gtfs static data");
-    let fresh_static = rx_active_static_data
-        .wait_for(|x| x.stop_lookup.len() > 1)
+    // We need static data to render station options, so we should just block all station
+    // config until static data is set up
+    info!("Waiting for static data to be built...");
+    rx_active_static_data
+        .wait_for(|static_data| !static_data.stop_lookup.is_empty())
         .await
         .unwrap();
-    info!("Got new gtfs static data");
-    let selected_station_config = config::SelectedStationConfig::build(
-        static_data::TEST_STOP_NAME,
-        &system_config,
-        &fresh_static.route_lookup,
-    )
-    .await;
-    drop(fresh_static);
 
-    let mut gtfs_rt_fetch_interval = time::interval(Duration::from_secs(30));
+    tokio::spawn(config::update_endpoints_on_static_data_update(
+        system_config,
+        rx_active_static_data.clone(),
+        tx_station_config.clone(),
+    ));
+
+    // We need a relevant endpoints before we can fetch targeted data, so we wait until we have relevant endpoints
+    info!("Waiting for station config to be built...");
+    rx_station_config
+        .wait_for(|station_config| !station_config.relevant_endpoints.is_empty())
+        .await
+        .unwrap();
+
+    let fetch_interval_seconds = 30;
+    let mut gtfs_rt_fetch_interval = time::interval(Duration::from_secs(fetch_interval_seconds));
     loop {
         gtfs_rt_fetch_interval.tick().await;
-        let entities = rt_data::gtfs_rt_handler(&selected_station_config.relevant_endpoints).await;
+
+        let station_config = rx_station_config.borrow();
+        let relevant_endpoints = station_config.relevant_endpoints.clone();
+        let target_station_name = station_config.station_name.clone();
+        if relevant_endpoints.is_empty() {
+            println!(
+                "No relevant endpoints found. Retrying in {} seconds...",
+                fetch_interval_seconds
+            );
+        } else {
+            dbg!(&relevant_endpoints);
+        }
+
+        let entities = rt_data::gtfs_rt_handler(relevant_endpoints).await;
+
         let active_static_data = rx_active_static_data.borrow();
         let relevant_stop_ids =
-            active_static_data.get_relevant_stops_to_station(static_data::TEST_STOP_NAME);
+            active_static_data.get_relevant_stops_to_station(&target_station_name);
 
         let packets = entities
             .iter()
@@ -53,8 +80,6 @@ async fn main() {
                 feed_entity_to_packet(entity, &active_static_data, &relevant_stop_ids)
             })
             .collect::<Vec<TraintimePacket>>();
-
-        info!("main loop: dropped mutex");
 
         for packet in &packets {
             println!("{}", packet)

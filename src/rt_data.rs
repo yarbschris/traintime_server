@@ -4,10 +4,10 @@ use log::info;
 use reqwest::Response;
 
 // For each endpoint, make a request. Put feed messages together, and return
-pub async fn gtfs_rt_handler(endpoints: &Vec<String>) -> Vec<FeedEntity> {
+pub async fn gtfs_rt_handler(endpoints: Vec<String>) -> Vec<FeedEntity> {
     let mut futures = Vec::new();
     for endpoint in endpoints {
-        futures.push(fetch_and_decode_gtfs_rt(endpoint.clone()))
+        futures.push(fetch_and_decode_gtfs_rt(endpoint))
     }
     join_all(futures).await.concat()
 }
