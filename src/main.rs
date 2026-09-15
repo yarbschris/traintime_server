@@ -1,12 +1,10 @@
+use crate::config::SupportedTransitSystem;
+use crate::types::{gtfs, static_data::StaticData};
 use log::info;
 use tokio::sync::{mpsc, watch};
-
-use crate::config::SupportedTransitSystem;
-use crate::static_data::StaticData;
-
 mod config;
-mod rt_data;
-mod static_data;
+mod rt_funcs;
+mod static_funcs;
 mod types;
 
 #[tokio::main]
@@ -30,9 +28,9 @@ async fn main() {
     let (tx_traintime_packets, mut rx_traintime_packets) = mpsc::channel(2);
 
     // TODO: We want to dynamically change station name, rn we just set it manually
-    tx_station_config.send_modify(|x| x.station_name = String::from("East Broadway"));
+    tx_station_config.send_modify(|x| x.station_name = gtfs::StationName::from("East Broadway"));
 
-    static_data::setup_gtfs_static(tx_active_static_data, rx_system_config.clone());
+    static_funcs::setup_gtfs_static(tx_active_static_data, rx_system_config.clone());
 
     tokio::spawn(config::update_endpoints_on_static_data_update(
         rx_system_config,
@@ -47,7 +45,7 @@ async fn main() {
         .await
         .unwrap();
 
-    tokio::spawn(rt_data::gtfs_rt_handler(
+    tokio::spawn(rt_funcs::gtfs_rt_handler(
         rx_station_config,
         rx_active_static_data,
         tx_traintime_packets,

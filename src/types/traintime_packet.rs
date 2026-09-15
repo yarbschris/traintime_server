@@ -1,11 +1,10 @@
-use crate::{static_data::StaticData, types::gtfs};
+use crate::types::{gtfs, static_data::StaticData};
 use gtfs_rt_decode::gtfs_rt_types::FeedEntity;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub struct TraintimePacket {
-    route_id: String,
-    stop_id: String,
-    trip_headsign: String,
+    route_id: gtfs::RouteID,
+    trip_headsign: gtfs::StationName,
     mins_until_arrival: i64,
     delay: Option<i32>,
 }
@@ -50,8 +49,7 @@ pub fn feed_entity_to_packet(
     };
 
     Some(TraintimePacket {
-        route_id: trip_update.trip.route_id.as_ref()?.clone(),
-        stop_id: next_update.stop_id.as_ref()?.clone(),
+        route_id: gtfs::RouteID(trip_update.trip.route_id.as_ref()?.clone()),
         trip_headsign: static_data
             .stop_lookup
             .get(

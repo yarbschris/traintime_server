@@ -1,4 +1,4 @@
-use crate::types::gtfs::{self, StopID};
+use crate::types::gtfs;
 use itertools::Itertools;
 use log::info;
 use prost::bytes::Bytes;
@@ -6,47 +6,7 @@ use std::{collections::HashMap, time::Duration};
 use tokio::sync::{mpsc, watch};
 
 use crate::config::TraintimeSystemConfig;
-
-pub struct StaticData {
-    pub stop_lookup: HashMap<gtfs::StopID, String>, // stop_id -> stop_name
-    pub route_lookup: HashMap<String, Vec<gtfs::RouteID>>, // station_name -> route_id
-}
-
-impl StaticData {
-    pub fn new() -> Self {
-        StaticData {
-            stop_lookup: HashMap::new(),
-            route_lookup: HashMap::new(),
-        }
-    }
-
-    fn build_from_static_data(
-        stops: Vec<gtfs::Stop>,
-        trips: Vec<gtfs::Trip>,
-        stop_times: Vec<gtfs::StopTime>,
-    ) -> Self {
-        let stop_lookup = build_stop_lookup(stops);
-        let route_lookup = build_route_lookup(stop_times, trips, &stop_lookup);
-        StaticData {
-            stop_lookup,
-            route_lookup,
-        }
-    }
-
-    pub fn get_relevant_stops_to_station(&self, target_stop_name: &str) -> Vec<&StopID> {
-        self.stop_lookup
-            .iter()
-            .filter(|(_, stop_name)| stop_name.as_str() == target_stop_name)
-            .map(|(stop_id, _)| stop_id)
-            .collect::<Vec<&StopID>>()
-    }
-}
-
-impl Default for StaticData {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+use crate::types::static_data::StaticData;
 
 pub fn setup_gtfs_static(
     tx_active_static_data: watch::Sender<StaticData>,
@@ -136,7 +96,7 @@ async fn parse_and_filter_gtfs_static_data(
     }
 }
 
-fn build_stop_lookup(stops: Vec<gtfs::Stop>) -> HashMap<gtfs::StopID, String> {
+pub fn build_stop_lookup(stops: Vec<gtfs::Stop>) -> HashMap<gtfs::StopID, gtfs::StationName> {
     info!("Building Stop Lookup");
     stops
         .into_iter()
@@ -145,11 +105,11 @@ fn build_stop_lookup(stops: Vec<gtfs::Stop>) -> HashMap<gtfs::StopID, String> {
         .collect()
 }
 
-fn build_route_lookup(
+pub fn build_route_lookup(
     stop_times: Vec<gtfs::StopTime>,
     trips: Vec<gtfs::Trip>,
-    stop_lookup: &HashMap<gtfs::StopID, String>,
-) -> HashMap<String, Vec<gtfs::RouteID>> {
+    stop_lookup: &HashMap<gtfs::StopID, gtfs::StationName>,
+) -> HashMap<gtfs::StationName, Vec<gtfs::RouteID>> {
     // For stop_times, first build a mapping of stop_id -> vector of trip_ids
     info!("Building StopTime Map");
     let mut stops_map: HashMap<gtfs::StopID, Vec<gtfs::TripID>> = HashMap::new();
@@ -169,7 +129,7 @@ fn build_route_lookup(
 
     // Finally, build a lookup table of station_name -> vec of route_id
     info!("Combining StopTime Map and Trip Map into Route Lookup");
-    let x: HashMap<String, Vec<gtfs::RouteID>> = stops_map
+    let x: HashMap<gtfs::StationName, Vec<gtfs::RouteID>> = stops_map
         .into_iter()
         .filter_map(|(stop_id, trip_ids)| {
             let stop_id = stop_lookup.get(&stop_id.0)?.clone();

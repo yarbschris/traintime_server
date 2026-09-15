@@ -7,13 +7,12 @@ use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 use tokio::time;
 
-use crate::types::gtfs;
-use crate::types::traintime_packet;
-use crate::{config, static_data};
+use crate::config;
+use crate::types::{gtfs, static_data::StaticData, traintime_packet};
 
 pub async fn gtfs_rt_handler(
     rx_station_config: watch::Receiver<config::SelectedStationConfig>,
-    rx_active_static_data: watch::Receiver<static_data::StaticData>,
+    rx_active_static_data: watch::Receiver<StaticData>,
     tx_traintime_packets: mpsc::Sender<Vec<traintime_packet::TraintimePacket>>,
 ) {
     let fetch_interval_seconds = 30;
@@ -41,7 +40,7 @@ pub async fn gtfs_rt_handler(
         let packets = {
             let active_static_data = rx_active_static_data.borrow();
             let relevant_stop_ids =
-                active_static_data.get_relevant_stops_to_station(&target_station_name);
+                active_static_data.get_relevant_stops_to_station(target_station_name.0.as_str());
 
             entities
                 .iter()

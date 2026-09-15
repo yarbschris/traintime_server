@@ -1,4 +1,7 @@
-use crate::{rt_data, static_data::StaticData, types::gtfs};
+use crate::{
+    rt_funcs,
+    types::{gtfs, static_data::StaticData},
+};
 use futures::future::join_all;
 use log::info;
 use tokio::sync::watch;
@@ -29,7 +32,7 @@ impl TraintimeSystemConfig {
 
 #[derive(Debug)]
 pub struct SelectedStationConfig {
-    pub station_name: String,
+    pub station_name: gtfs::StationName,
     pub relevant_endpoints: Vec<String>,
 }
 
@@ -74,7 +77,7 @@ pub async fn update_endpoints_on_static_data_update(
 impl SelectedStationConfig {
     pub fn new() -> Self {
         SelectedStationConfig {
-            station_name: String::new(),
+            station_name: gtfs::StationName::new(),
             relevant_endpoints: Vec::new(),
         }
     }
@@ -90,8 +93,8 @@ async fn determine_endpoint_routes(
     endpoint: String,
     relevant_routes: &[gtfs::RouteID],
 ) -> Option<String> {
-    let decoded_entities = rt_data::fetch_and_decode_gtfs_rt(endpoint.as_str()).await;
-    if rt_data::accumulate_entities_routes(decoded_entities)
+    let decoded_entities = rt_funcs::fetch_and_decode_gtfs_rt(endpoint.as_str()).await;
+    if rt_funcs::accumulate_entities_routes(decoded_entities)
         .iter()
         .any(|x| relevant_routes.contains(x))
     {

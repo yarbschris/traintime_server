@@ -1,13 +1,38 @@
+use std::fmt::Display;
+
 #[derive(Debug, serde::Deserialize)]
 pub struct Stop {
     pub stop_id: StopID,
-    pub stop_name: String,
+    pub stop_name: StationName,
     pub parent_station: String,
 }
 
 #[derive(Debug, Clone, serde::Deserialize, Hash, PartialEq, std::cmp::Eq)]
+pub struct StationName(pub String);
+impl StationName {
+    pub fn new() -> Self {
+        StationName(String::new())
+    }
 
+    pub fn from(name: &str) -> Self {
+        StationName(String::from(name))
+    }
+}
+
+impl Display for StationName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, serde::Deserialize, Hash, PartialEq, std::cmp::Eq)]
 pub struct RouteID(pub String);
+
+impl Display for RouteID {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 #[derive(Debug, serde::Deserialize, Hash, PartialEq, std::cmp::Eq)]
 pub struct TripID(pub String);
