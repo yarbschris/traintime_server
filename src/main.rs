@@ -14,8 +14,8 @@ async fn main() {
     colog::init();
 
     // Watch channel for transit system configuration. In the future we want to be able to change
-    // the target transit system
-    let (tx_system_config, rx_system_config) = watch::channel(
+    // the target transit system (Unused _tx_system_config)
+    let (_tx_system_config, rx_system_config) = watch::channel(
         config::TraintimeSystemConfig::read_config_by_system(SupportedTransitSystem::NycSubway),
     );
 

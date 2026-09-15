@@ -6,12 +6,9 @@ use tokio::sync::{mpsc, watch};
 
 use crate::config::TraintimeSystemConfig;
 
-static TIMES_SQUARE_STOP_NAME: &str = "Times Sq-42 St";
-pub static TEST_STOP_NAME: &str = TIMES_SQUARE_STOP_NAME;
-
 pub struct StaticData {
     pub stop_lookup: HashMap<String, String>, // stop_id -> stop_name
-    pub route_lookup: HashMap<String, Vec<String>>,
+    pub route_lookup: HashMap<String, Vec<String>>, // station_name -> route_id
 }
 
 impl StaticData {
@@ -158,29 +155,6 @@ fn build_stop_lookup(mut stops: Vec<Stop>) -> HashMap<String, String> {
         }
         acc.insert(stop.stop_id, stop.stop_name);
         acc
-    })
-}
-
-pub fn get_unique_station_names(stops: &[Stop]) -> Vec<&String> {
-    stops.iter().fold(Vec::new(), |mut acc, stop| {
-        if acc.contains(&&stop.stop_name) {
-            acc
-        } else {
-            acc.push(&stop.stop_name);
-            acc
-        }
-    })
-}
-
-// Given a station name, get all stop ids where parent field is not none (a child station)
-pub fn get_child_stop_ids_by_station_name(stops: &[Stop], stop_name: &str) -> Vec<String> {
-    stops.iter().fold(Vec::new(), |mut acc, stop| {
-        if stop.stop_name == stop_name && !stop.parent_station.is_empty() {
-            acc.push(stop.stop_id.clone());
-            acc
-        } else {
-            acc
-        }
     })
 }
 

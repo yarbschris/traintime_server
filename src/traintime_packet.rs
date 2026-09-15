@@ -1,5 +1,5 @@
 use crate::static_data::StaticData;
-use gtfs_rt_decode::gtfs_rt_types::{FeedEntity, trip_update::StopTimeUpdate};
+use gtfs_rt_decode::gtfs_rt_types::FeedEntity;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub struct TraintimePacket {
@@ -39,14 +39,15 @@ pub fn feed_entity_to_packet(
         .as_ref()?
         .stop_time_update
         .iter()
-        .filter(|update| relevant_stop_ids.contains(&update.stop_id.as_ref().unwrap()))
-        .collect::<Vec<&StopTimeUpdate>>()
-        .into_iter()
-        .next()?;
+        .find(|x| {
+            x.stop_id.is_some() && relevant_stop_ids.contains(&x.stop_id.as_ref().unwrap())
+        })?;
+
     let arrival_time = next_update
         .arrival
         .and_then(|a| a.time)
         .or_else(|| next_update.departure.and_then(|d| d.time))?;
+
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -55,6 +56,7 @@ pub fn feed_entity_to_packet(
     if mins_until.is_negative() {
         return None;
     };
+
     Some(TraintimePacket {
         route_id: entity.trip_update.as_ref()?.trip.route_id.as_ref()?.clone(),
         stop_id: next_update.stop_id.as_ref()?.clone(),
