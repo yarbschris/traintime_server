@@ -4,7 +4,7 @@ use log::info;
 use serde_norway;
 use tokio::sync::watch;
 
-const NYC_SUBWAY_CONFIG_PATH: &str = include_str!("../system_configs/nyc_subway.yml");
+const NYC_SUBWAY_CONFIG: &str = include_str!("../system_configs/nyc_subway.yml");
 
 #[derive(Debug, serde::Deserialize)]
 pub struct TraintimeSystemConfig {
@@ -20,7 +20,7 @@ impl TraintimeSystemConfig {
 
     pub fn read_config_by_system(system: SupportedTransitSystem) -> TraintimeSystemConfig {
         let config = match system {
-            SupportedTransitSystem::NycSubway => NYC_SUBWAY_CONFIG_PATH,
+            SupportedTransitSystem::NycSubway => NYC_SUBWAY_CONFIG,
         };
 
         TraintimeSystemConfig::parse_config(config)
