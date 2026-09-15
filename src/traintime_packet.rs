@@ -14,13 +14,7 @@ impl std::fmt::Display for TraintimePacket {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Line: {} bound {} to {}\nMinutes Until Arrival: {},\nDelay: {}\n",
-            // TODO: This pattern is NYC Subway Specific
-            match &self.stop_id[self.stop_id.len() - 1..] {
-                "S" => "Downtown",
-                "N" => "Uptown",
-                _ => "Unknown",
-            },
+            "Line: {} to {}\nMinutes Until Arrival: {},\nDelay: {}\n",
             self.route_id,
             self.trip_headsign,
             self.mins_until_arrival,
@@ -32,16 +26,13 @@ impl std::fmt::Display for TraintimePacket {
 pub fn feed_entity_to_packet(
     entity: &FeedEntity,
     static_data: &StaticData,
-    relevant_stop_ids: &Vec<&String>,
+    relevant_stop_ids: &[&String],
 ) -> Option<TraintimePacket> {
-    let next_update = entity
-        .trip_update
-        .as_ref()?
-        .stop_time_update
-        .iter()
-        .find(|x| {
-            x.stop_id.is_some() && relevant_stop_ids.contains(&x.stop_id.as_ref().unwrap())
-        })?;
+    let trip_update = entity.trip_update.as_ref()?;
+
+    let next_update = trip_update.stop_time_update.iter().find(|x| {
+        x.stop_id.is_some() && relevant_stop_ids.contains(&x.stop_id.as_ref().unwrap())
+    })?;
 
     let arrival_time = next_update
         .arrival
@@ -58,14 +49,12 @@ pub fn feed_entity_to_packet(
     };
 
     Some(TraintimePacket {
-        route_id: entity.trip_update.as_ref()?.trip.route_id.as_ref()?.clone(),
+        route_id: trip_update.trip.route_id.as_ref()?.clone(),
         stop_id: next_update.stop_id.as_ref()?.clone(),
         trip_headsign: static_data
             .stop_lookup
             .get(
-                &entity
-                    .trip_update
-                    .as_ref()?
+                &trip_update
                     .stop_time_update
                     .iter()
                     .last()?
