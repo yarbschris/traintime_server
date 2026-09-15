@@ -4,10 +4,10 @@ use tokio::sync::{mpsc, watch};
 use crate::config::SupportedTransitSystem;
 use crate::static_data::StaticData;
 
-pub mod config;
-pub mod rt_data;
-pub mod static_data;
-pub mod traintime_packet;
+mod config;
+mod rt_data;
+mod static_data;
+mod traintime_packet;
 
 #[tokio::main]
 async fn main() {
