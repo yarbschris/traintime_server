@@ -35,13 +35,8 @@ impl StaticData {
     pub fn get_relevant_stops_to_station(&self, target_stop_name: &str) -> Vec<&String> {
         self.stop_lookup
             .iter()
-            .filter_map(|(stop_id, stop_name)| {
-                if stop_name == target_stop_name {
-                    Some(stop_id)
-                } else {
-                    None
-                }
-            })
+            .filter(|(_, stop_name)| stop_name.as_str() == target_stop_name)
+            .map(|(stop_id, _)| stop_id)
             .collect::<Vec<&String>>()
     }
 }
@@ -147,15 +142,13 @@ struct Stop {
     parent_station: String,
 }
 
-fn build_stop_lookup(mut stops: Vec<Stop>) -> HashMap<String, String> {
+fn build_stop_lookup(stops: Vec<Stop>) -> HashMap<String, String> {
     info!("Building Stop Lookup");
-    stops.drain(..).fold(HashMap::new(), |mut acc, stop| {
-        if stop.parent_station.is_empty() {
-            return acc;
-        }
-        acc.insert(stop.stop_id, stop.stop_name);
-        acc
-    })
+    stops
+        .into_iter()
+        .filter(|stop| !stop.parent_station.is_empty())
+        .map(|stop| (stop.stop_id, stop.stop_name))
+        .collect()
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -171,34 +164,30 @@ struct StopTime {
 }
 
 fn build_route_lookup(
-    mut stop_times: Vec<StopTime>,
-    mut trips: Vec<Trip>,
+    stop_times: Vec<StopTime>,
+    trips: Vec<Trip>,
     stop_lookup: &HashMap<String, String>,
 ) -> HashMap<String, Vec<String>> {
     // For stop_times, first build a mapping of stop_id -> vector of trip_ids
     info!("Building StopTime Map");
-    let mut stops_map: HashMap<String, Vec<String>> =
-        stop_times.drain(..).fold(HashMap::new(), |mut acc, trip| {
-            if let Some(vec) = acc.get_mut(&trip.stop_id) {
-                vec.push(trip.trip_id);
-                acc
-            } else {
-                acc.insert(trip.stop_id, vec![trip.trip_id]);
-                acc
-            }
-        });
+    let mut stops_map: HashMap<String, Vec<String>> = HashMap::new();
+    for stop_time in stop_times {
+        stops_map
+            .entry(stop_time.stop_id)
+            .or_default()
+            .push(stop_time.trip_id);
+    }
 
     // For trips, build a mapping of trip_id -> route_id
     info!("Building Trip Map");
-    let trips_map: HashMap<String, String> =
-        trips.drain(..).fold(HashMap::new(), |mut acc, stop_time| {
-            acc.insert(stop_time.trip_id, stop_time.route_id);
-            acc
-        });
+    let trips_map: HashMap<String, String> = trips
+        .into_iter()
+        .map(|trip| (trip.trip_id, trip.route_id))
+        .collect();
 
     // Finally, build a lookup table of station_name -> vec of route_id
     info!("Combining StopTime Map and Trip Map into Route Lookup");
-    stops_map.drain().fold(
+    stops_map.into_iter().fold(
         HashMap::new(),
         |mut acc: HashMap<String, Vec<String>>, (stop_id, trip_ids)| {
             let key = stop_lookup.get(&stop_id).unwrap();
