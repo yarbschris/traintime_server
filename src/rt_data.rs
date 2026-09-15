@@ -57,16 +57,15 @@ pub async fn gtfs_rt_handler(
 
 // For each endpoint, make a request. Put feed messages together, and return
 pub async fn gtfs_rt_request_handler(endpoints: Vec<String>) -> Vec<FeedEntity> {
-    let mut futures = Vec::new();
-    for endpoint in endpoints {
-        futures.push(fetch_and_decode_gtfs_rt(endpoint))
-    }
+    let futures = endpoints
+        .iter()
+        .map(|endpoint| fetch_and_decode_gtfs_rt(endpoint));
     join_all(futures).await.concat()
 }
 
-pub async fn fetch_and_decode_gtfs_rt(endpoint: String) -> Vec<FeedEntity> {
+pub async fn fetch_and_decode_gtfs_rt(endpoint: &str) -> Vec<FeedEntity> {
     info!("Fetching and decoding gtfs-rt data");
-    let Ok(response) = fetch_gtfs_rt(&endpoint).await else {
+    let Ok(response) = fetch_gtfs_rt(endpoint).await else {
         panic!("Error Fetching GTFS-RT");
     };
     info!("Fetched gtfs-rt data");

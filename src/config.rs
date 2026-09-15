@@ -85,7 +85,7 @@ impl Default for SelectedStationConfig {
 }
 
 async fn determine_endpoint_routes(endpoint: String, relevant_routes: &[String]) -> Option<String> {
-    let decoded_entities = rt_data::fetch_and_decode_gtfs_rt(endpoint.clone()).await;
+    let decoded_entities = rt_data::fetch_and_decode_gtfs_rt(endpoint.as_str()).await;
     if rt_data::accumulate_entities_routes(decoded_entities)
         .iter()
         .any(|x| relevant_routes.contains(x))
