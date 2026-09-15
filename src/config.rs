@@ -1,7 +1,6 @@
 use crate::{rt_data, static_data::StaticData};
 use futures::future::join_all;
 use log::info;
-use serde_norway;
 use tokio::sync::watch;
 
 const NYC_SUBWAY_CONFIG: &str = include_str!("../system_configs/nyc_subway.yml");
@@ -14,8 +13,7 @@ pub struct TraintimeSystemConfig {
 
 impl TraintimeSystemConfig {
     fn parse_config(config: &str) -> TraintimeSystemConfig {
-        let parsed_config: TraintimeSystemConfig = serde_norway::from_str(config).unwrap();
-        parsed_config
+        serde_norway::from_str(config).unwrap()
     }
 
     pub fn read_config_by_system(system: SupportedTransitSystem) -> TraintimeSystemConfig {
@@ -56,15 +54,13 @@ pub async fn update_endpoints_on_static_data_update(
             system_config.gtfs_rt_endpoints.clone()
         };
 
-        let futures = {
-            gtfs_rt_endpoints
-                .iter()
-                .map(|endpoint| determine_endpoint_routes(endpoint.to_owned(), &relevant_routes))
-        };
+        let futures = gtfs_rt_endpoints
+            .iter()
+            .map(|endpoint| determine_endpoint_routes(endpoint.to_owned(), &relevant_routes));
 
         let relevant_endpoints = join_all(futures)
             .await
-            .drain(..)
+            .into_iter()
             .flatten()
             .collect::<Vec<String>>();
 
