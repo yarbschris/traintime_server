@@ -47,7 +47,7 @@ pub async fn update_endpoints_on_static_data_update(
             static_data
                 .route_lookup
                 .get(&station_config.station_name)
-                .unwrap()
+                .expect("No relevant routes found, please check config")
                 .clone()
         };
 

@@ -16,7 +16,7 @@ async fn main() {
     // Watch channel for transit system configuration. In the future we want to be able to change
     // the target transit system (Unused _tx_system_config)
     let (_tx_system_config, rx_system_config) = watch::channel(
-        config::TraintimeSystemConfig::read_config_by_system(SupportedTransitSystem::BostonTransit),
+        config::TraintimeSystemConfig::read_config_by_system(SupportedTransitSystem::NycSubway),
     );
 
     // Watch channel for station config
@@ -30,7 +30,7 @@ async fn main() {
     let (tx_traintime_packets, mut rx_traintime_packets) = mpsc::channel(2);
 
     // TODO: We want to dynamically change station name, rn we just set it manually
-    tx_station_config.send_modify(|x| x.station_name = String::from("Park Street"));
+    tx_station_config.send_modify(|x| x.station_name = String::from("East Broadway"));
 
     static_data::setup_gtfs_static(tx_active_static_data, rx_system_config.clone());
 
