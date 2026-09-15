@@ -1,7 +1,4 @@
-use crate::{
-    rt_data,
-    static_data::{self, StaticData},
-};
+use crate::{rt_data, static_data::StaticData, types::gtfs};
 use futures::future::join_all;
 use log::info;
 use tokio::sync::watch;
@@ -89,7 +86,7 @@ impl Default for SelectedStationConfig {
 
 async fn determine_endpoint_routes(
     endpoint: String,
-    relevant_routes: &[static_data::RouteID],
+    relevant_routes: &[gtfs::RouteID],
 ) -> Option<String> {
     let decoded_entities = rt_data::fetch_and_decode_gtfs_rt(endpoint.as_str()).await;
     if rt_data::accumulate_entities_routes(decoded_entities)

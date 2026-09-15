@@ -7,7 +7,7 @@ use crate::static_data::StaticData;
 mod config;
 mod rt_data;
 mod static_data;
-mod traintime_packet;
+mod types;
 
 #[tokio::main]
 async fn main() {

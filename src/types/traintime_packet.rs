@@ -1,4 +1,4 @@
-use crate::static_data::StaticData;
+use crate::{static_data::StaticData, types::gtfs};
 use gtfs_rt_decode::gtfs_rt_types::FeedEntity;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -26,12 +26,13 @@ impl std::fmt::Display for TraintimePacket {
 pub fn feed_entity_to_packet(
     entity: &FeedEntity,
     static_data: &StaticData,
-    relevant_stop_ids: &[&String],
+    relevant_stop_ids: &[&gtfs::StopID],
 ) -> Option<TraintimePacket> {
     let trip_update = entity.trip_update.as_ref()?;
 
     let next_update = trip_update.stop_time_update.iter().find(|x| {
-        x.stop_id.is_some() && relevant_stop_ids.contains(&x.stop_id.as_ref().unwrap())
+        x.stop_id.is_some()
+            && relevant_stop_ids.contains(&&gtfs::StopID(x.stop_id.clone().unwrap()))
     })?;
 
     let arrival_time = next_update

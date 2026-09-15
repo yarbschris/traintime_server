@@ -7,8 +7,9 @@ use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 use tokio::time;
 
-use crate::static_data::RouteID;
-use crate::{config, static_data, traintime_packet};
+use crate::types::gtfs;
+use crate::types::traintime_packet;
+use crate::{config, static_data};
 
 pub async fn gtfs_rt_handler(
     rx_station_config: watch::Receiver<config::SelectedStationConfig>,
@@ -88,12 +89,12 @@ async fn decode_gtfs_rt(response: Response) -> Result<FeedMessage, prost::Decode
     gtfs_rt_decode::decode::from_bytes(response_bytes)
 }
 
-pub fn accumulate_entities_routes(entities: Vec<FeedEntity>) -> Vec<static_data::RouteID> {
+pub fn accumulate_entities_routes(entities: Vec<FeedEntity>) -> Vec<gtfs::RouteID> {
     entities.into_iter().fold(Vec::new(), |mut acc, entity| {
         if let Some(update) = entity.trip_update
             && let Some(route) = update.trip.route_id
         {
-            acc.push(RouteID(route));
+            acc.push(gtfs::RouteID(route));
         }
         acc.into_iter().unique().collect()
     })

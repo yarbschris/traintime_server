@@ -1,3 +1,4 @@
+use crate::types::gtfs::{self, StopID};
 use itertools::Itertools;
 use log::info;
 use prost::bytes::Bytes;
@@ -7,8 +8,8 @@ use tokio::sync::{mpsc, watch};
 use crate::config::TraintimeSystemConfig;
 
 pub struct StaticData {
-    pub stop_lookup: HashMap<String, String>, // stop_id -> stop_name
-    pub route_lookup: HashMap<String, Vec<RouteID>>, // station_name -> route_id
+    pub stop_lookup: HashMap<gtfs::StopID, String>, // stop_id -> stop_name
+    pub route_lookup: HashMap<String, Vec<gtfs::RouteID>>, // station_name -> route_id
 }
 
 impl StaticData {
@@ -20,9 +21,9 @@ impl StaticData {
     }
 
     fn build_from_static_data(
-        stops: Vec<Stop>,
-        trips: Vec<Trip>,
-        stop_times: Vec<StopTime>,
+        stops: Vec<gtfs::Stop>,
+        trips: Vec<gtfs::Trip>,
+        stop_times: Vec<gtfs::StopTime>,
     ) -> Self {
         let stop_lookup = build_stop_lookup(stops);
         let route_lookup = build_route_lookup(stop_times, trips, &stop_lookup);
@@ -32,12 +33,12 @@ impl StaticData {
         }
     }
 
-    pub fn get_relevant_stops_to_station(&self, target_stop_name: &str) -> Vec<&String> {
+    pub fn get_relevant_stops_to_station(&self, target_stop_name: &str) -> Vec<&StopID> {
         self.stop_lookup
             .iter()
             .filter(|(_, stop_name)| stop_name.as_str() == target_stop_name)
             .map(|(stop_id, _)| stop_id)
-            .collect::<Vec<&String>>()
+            .collect::<Vec<&StopID>>()
     }
 }
 
@@ -115,17 +116,17 @@ async fn parse_and_filter_gtfs_static_data(
         let mut rdr = csv::Reader::from_reader(zip_reader.by_name("stops.txt").unwrap());
 
         info!("Deserializing Stop Data...");
-        let stops: Vec<Stop> = rdr.deserialize().collect::<Result<_, _>>().unwrap();
+        let stops: Vec<gtfs::Stop> = rdr.deserialize().collect::<Result<_, _>>().unwrap();
         drop(rdr);
 
         info!("Deserializing Trip Data...");
         let mut rdr = csv::Reader::from_reader(zip_reader.by_name("trips.txt").unwrap());
-        let trips: Vec<Trip> = rdr.deserialize().collect::<Result<_, _>>().unwrap();
+        let trips: Vec<gtfs::Trip> = rdr.deserialize().collect::<Result<_, _>>().unwrap();
         drop(rdr);
 
         info!("Deserializing StopTime Data...");
         let mut rdr = csv::Reader::from_reader(zip_reader.by_name("stop_times.txt").unwrap());
-        let stop_times: Vec<StopTime> = rdr.deserialize().collect::<Result<_, _>>().unwrap();
+        let stop_times: Vec<gtfs::StopTime> = rdr.deserialize().collect::<Result<_, _>>().unwrap();
 
         info!("Building static data...");
         let data_to_send = StaticData::build_from_static_data(stops, trips, stop_times);
@@ -135,14 +136,7 @@ async fn parse_and_filter_gtfs_static_data(
     }
 }
 
-#[derive(Debug, serde::Deserialize)]
-struct Stop {
-    stop_id: String,
-    stop_name: String,
-    parent_station: String,
-}
-
-fn build_stop_lookup(stops: Vec<Stop>) -> HashMap<String, String> {
+fn build_stop_lookup(stops: Vec<gtfs::Stop>) -> HashMap<gtfs::StopID, String> {
     info!("Building Stop Lookup");
     stops
         .into_iter()
@@ -151,41 +145,14 @@ fn build_stop_lookup(stops: Vec<Stop>) -> HashMap<String, String> {
         .collect()
 }
 
-#[derive(Debug, Clone, serde::Deserialize, Hash, PartialEq, std::cmp::Eq)]
-pub struct RouteID(pub String);
-
-#[derive(Debug, serde::Deserialize, Hash, PartialEq, std::cmp::Eq)]
-struct TripID(String);
-
-#[derive(Debug, serde::Deserialize, Hash, PartialEq, std::cmp::Eq)]
-struct StopID(String);
-
-impl std::borrow::Borrow<String> for StopID {
-    fn borrow(&self) -> &String {
-        &self.0
-    }
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct Trip {
-    route_id: RouteID,
-    trip_id: TripID,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct StopTime {
-    trip_id: TripID,
-    stop_id: StopID,
-}
-
 fn build_route_lookup(
-    stop_times: Vec<StopTime>,
-    trips: Vec<Trip>,
-    stop_lookup: &HashMap<String, String>,
-) -> HashMap<String, Vec<RouteID>> {
+    stop_times: Vec<gtfs::StopTime>,
+    trips: Vec<gtfs::Trip>,
+    stop_lookup: &HashMap<gtfs::StopID, String>,
+) -> HashMap<String, Vec<gtfs::RouteID>> {
     // For stop_times, first build a mapping of stop_id -> vector of trip_ids
     info!("Building StopTime Map");
-    let mut stops_map: HashMap<StopID, Vec<TripID>> = HashMap::new();
+    let mut stops_map: HashMap<gtfs::StopID, Vec<gtfs::TripID>> = HashMap::new();
     for stop_time in stop_times {
         stops_map
             .entry(stop_time.stop_id)
@@ -195,14 +162,14 @@ fn build_route_lookup(
 
     // For trips, build a mapping of trip_id -> route_id
     info!("Building Trip Map");
-    let trips_map: HashMap<TripID, RouteID> = trips
+    let trips_map: HashMap<gtfs::TripID, gtfs::RouteID> = trips
         .into_iter()
         .map(|trip| (trip.trip_id, trip.route_id))
         .collect();
 
     // Finally, build a lookup table of station_name -> vec of route_id
     info!("Combining StopTime Map and Trip Map into Route Lookup");
-    let x: HashMap<String, Vec<RouteID>> = stops_map
+    let x: HashMap<String, Vec<gtfs::RouteID>> = stops_map
         .into_iter()
         .map(|(stop_id, trip_ids)| {
             (
@@ -218,19 +185,4 @@ fn build_route_lookup(
         .collect();
 
     x
-}
-
-#[allow(unused)]
-#[derive(Debug, serde::Deserialize)]
-struct Route {
-    route_id: String,
-    agency_id: String,
-    route_short_name: String,
-    route_long_name: String,
-    route_desc: String,
-    route_type: String,
-    route_url: String,
-    route_color: String,
-    route_text_color: String,
-    route_sort_order: String,
 }
