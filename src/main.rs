@@ -32,7 +32,7 @@ async fn main() {
     // TODO: We want to dynamically change station name, rn we just set it manually
     tx_station_config.send_modify(|x| x.station_name = String::from("East Broadway"));
 
-    static_data::setup_gtfs_static(tx_active_static_data, rx_system_config.clone()).await;
+    static_data::setup_gtfs_static(tx_active_static_data, rx_system_config.clone());
 
     tokio::spawn(config::update_endpoints_on_static_data_update(
         rx_system_config,

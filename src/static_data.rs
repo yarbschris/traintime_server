@@ -52,13 +52,13 @@ impl Default for StaticData {
     }
 }
 
-pub async fn setup_gtfs_static(
+pub fn setup_gtfs_static(
     tx_active_static_data: watch::Sender<StaticData>,
     rx_system_config: watch::Receiver<TraintimeSystemConfig>,
 ) {
     let (tx_new_static_data, rx_new_static_data) = mpsc::channel(1);
 
-    fetch_static_handler(tx_new_static_data, rx_system_config).await;
+    fetch_static_handler(tx_new_static_data, rx_system_config);
 
     tokio::spawn(update_static_data_handler(
         rx_new_static_data,
@@ -66,7 +66,7 @@ pub async fn setup_gtfs_static(
     ));
 }
 
-pub async fn fetch_static_handler(
+pub fn fetch_static_handler(
     tx_static_data: mpsc::Sender<StaticData>,
     rx_system_config: watch::Receiver<TraintimeSystemConfig>,
 ) {
