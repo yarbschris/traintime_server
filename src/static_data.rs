@@ -141,9 +141,9 @@ async fn parse_and_filter_gtfs_static_data(
 }
 
 #[derive(Debug, serde::Deserialize)]
-pub struct Stop {
+struct Stop {
     stop_id: String,
-    pub stop_name: String,
+    stop_name: String,
     parent_station: String,
 }
 
