@@ -1,6 +1,7 @@
 use futures::future::join_all;
 use gtfs_rt_decode::gtfs_rt_types::{FeedEntity, FeedMessage};
-use log::info;
+use itertools::Itertools;
+use log::{info, warn};
 use reqwest::Response;
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
@@ -27,10 +28,11 @@ pub async fn gtfs_rt_handler(
             )
         };
         if relevant_endpoints.is_empty() {
-            println!(
+            warn!(
                 "No relevant endpoints found. Retrying in {} seconds...",
                 fetch_interval_seconds
-            )
+            );
+            continue;
         }
 
         let entities = gtfs_rt_request_handler(relevant_endpoints).await;
@@ -85,14 +87,13 @@ async fn decode_gtfs_rt(response: Response) -> Result<FeedMessage, prost::Decode
     gtfs_rt_decode::decode::from_bytes(response_bytes)
 }
 
-pub fn accumulate_entities_routes(mut entities: Vec<FeedEntity>) -> Vec<String> {
-    entities.drain(..).fold(Vec::new(), |mut acc, entity| {
+pub fn accumulate_entities_routes(entities: Vec<FeedEntity>) -> Vec<String> {
+    entities.into_iter().fold(Vec::new(), |mut acc, entity| {
         if let Some(update) = entity.trip_update
             && let Some(route) = update.trip.route_id
-            && !acc.contains(&route)
         {
             acc.push(route);
         }
-        acc
+        acc.into_iter().unique().collect()
     })
 }
