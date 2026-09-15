@@ -4,6 +4,8 @@ use prost::bytes::Bytes;
 use std::{collections::HashMap, time::Duration};
 use tokio::sync::{mpsc, watch};
 
+use crate::config::TraintimeSystemConfig;
+
 static TIMES_SQUARE_STOP_NAME: &str = "Times Sq-42 St";
 pub static TEST_STOP_NAME: &str = TIMES_SQUARE_STOP_NAME;
 
@@ -55,11 +57,11 @@ impl Default for StaticData {
 
 pub async fn setup_gtfs_static(
     tx_active_static_data: watch::Sender<StaticData>,
-    gtfs_static_endpoint: String,
+    rx_system_config: watch::Receiver<TraintimeSystemConfig>,
 ) {
     let (tx_new_static_data, rx_new_static_data) = mpsc::channel(1);
 
-    fetch_static_handler(tx_new_static_data, gtfs_static_endpoint).await;
+    fetch_static_handler(tx_new_static_data, rx_system_config).await;
 
     tokio::spawn(update_static_data_handler(
         rx_new_static_data,
@@ -69,14 +71,11 @@ pub async fn setup_gtfs_static(
 
 pub async fn fetch_static_handler(
     tx_static_data: mpsc::Sender<StaticData>,
-    gtfs_static_endpoint: String,
+    rx_system_config: watch::Receiver<TraintimeSystemConfig>,
 ) {
     let (tx_static_bytes, rx_static_bytes) = mpsc::channel(2);
 
-    tokio::spawn(fetch_gtfs_static_data(
-        tx_static_bytes,
-        gtfs_static_endpoint,
-    ));
+    tokio::spawn(fetch_gtfs_static_data(tx_static_bytes, rx_system_config));
 
     tokio::spawn(parse_and_filter_gtfs_static_data(
         tx_static_data,
@@ -96,11 +95,15 @@ pub async fn update_static_data_handler(
 }
 
 /// Make a request to the endpoint which provides gtfs static data
-async fn fetch_gtfs_static_data(tx: mpsc::Sender<Bytes>, gtfs_static_endpoint: String) {
+async fn fetch_gtfs_static_data(
+    tx: mpsc::Sender<Bytes>,
+    rx_system_config: watch::Receiver<TraintimeSystemConfig>,
+) {
     let mut gtfs_static_fetch_interval = tokio::time::interval(Duration::from_hours(2));
     loop {
         gtfs_static_fetch_interval.tick().await;
         info!("Fetching GTFS Static Data...");
+        let gtfs_static_endpoint = rx_system_config.borrow().gtfs_static_endpoint.clone();
         let response = reqwest::get(&gtfs_static_endpoint)
             .await
             .expect("Failed to fetch static data");
