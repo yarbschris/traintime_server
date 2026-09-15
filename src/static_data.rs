@@ -171,16 +171,17 @@ fn build_route_lookup(
     info!("Combining StopTime Map and Trip Map into Route Lookup");
     let x: HashMap<String, Vec<gtfs::RouteID>> = stops_map
         .into_iter()
-        .map(|(stop_id, trip_ids)| {
-            (
-                stop_lookup.get(&stop_id.0).unwrap().clone(),
+        .filter_map(|(stop_id, trip_ids)| {
+            let stop_id = stop_lookup.get(&stop_id.0)?.clone();
+            Some((
+                stop_id,
                 trip_ids
                     .into_iter()
                     .filter_map(|trip_id| trips_map.get(&trip_id))
                     .unique()
                     .cloned()
                     .collect(),
-            )
+            ))
         })
         .collect();
 
