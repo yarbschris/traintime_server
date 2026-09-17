@@ -1,7 +1,8 @@
 use crate::types::gtfs;
 use itertools::Itertools;
-use log::info;
+use log::{error, info};
 use prost::bytes::Bytes;
+use reqwest::header::HeaderValue;
 use std::{collections::HashMap, time::Duration};
 use tokio::sync::{mpsc, watch};
 
@@ -52,18 +53,45 @@ async fn fetch_gtfs_static_data(
     tx: mpsc::Sender<Bytes>,
     rx_system_config: watch::Receiver<TraintimeSystemConfig>,
 ) {
-    let mut gtfs_static_fetch_interval = tokio::time::interval(Duration::from_hours(2));
+    let mut gtfs_static_fetch_interval = tokio::time::interval(Duration::from_hours(1));
+    let mut last_etag: HeaderValue =
+        HeaderValue::from_str("none").expect("Ensure default etag is a valid HeaderValue");
     loop {
         gtfs_static_fetch_interval.tick().await;
         info!("Fetching GTFS Static Data...");
         let gtfs_static_endpoint = rx_system_config.borrow().gtfs_static_endpoint.clone();
-        let response = reqwest::get(&gtfs_static_endpoint)
-            .await
-            .expect("Failed to fetch static data");
-        info!("Fetched GTFS Static Data!");
-        tx.send(response.bytes().await.unwrap()).await.unwrap();
-        info!("Sent static bytes");
+
+        match reqwest::get(&gtfs_static_endpoint).await {
+            Ok(response) => {
+                if let Err(e) = response.error_for_status_ref() {
+                    print_static_fetch_error_message(e);
+                    continue;
+                }
+
+                if let Some(new_etag) = response.headers().get("etag") {
+                    if last_etag == new_etag {
+                        info!("No new static data detected, skipping update...");
+                        continue;
+                    }
+                    last_etag = new_etag.clone();
+                }
+
+                info!("Fetched GTFS Static Data!");
+                tx.send(response.bytes().await.unwrap()).await.unwrap();
+                info!("Sent static bytes");
+            }
+            Err(e) => {
+                print_static_fetch_error_message(e);
+            }
+        }
     }
+}
+
+fn print_static_fetch_error_message(e: reqwest::Error) {
+    error!(
+        "Failed to fetch gtfs static data.\nError: {}\nFetch will retry on regular fetch interval...",
+        e.without_url(),
+    )
 }
 
 async fn parse_and_filter_gtfs_static_data(
