@@ -10,7 +10,19 @@ use tokio::time;
 use crate::config;
 use crate::types::{gtfs, static_data::StaticData, traintime_packet};
 
-pub async fn gtfs_rt_handler(
+pub fn setup_gtfs_rt(
+    rx_station_config: watch::Receiver<config::SelectedStationConfig>,
+    rx_active_static_data: watch::Receiver<StaticData>,
+    tx_traintime_packets: mpsc::Sender<Vec<traintime_packet::TraintimePacket>>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(gtfs_rt_handler(
+        rx_station_config,
+        rx_active_static_data,
+        tx_traintime_packets,
+    ))
+}
+
+async fn gtfs_rt_handler(
     rx_station_config: watch::Receiver<config::SelectedStationConfig>,
     rx_active_static_data: watch::Receiver<StaticData>,
     tx_traintime_packets: mpsc::Sender<Vec<traintime_packet::TraintimePacket>>,

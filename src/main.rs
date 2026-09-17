@@ -45,11 +45,11 @@ async fn main() {
         .await
         .unwrap();
 
-    tokio::spawn(rt_funcs::gtfs_rt_handler(
+    rt_funcs::setup_gtfs_rt(
         rx_station_config,
         rx_active_static_data,
         tx_traintime_packets,
-    ));
+    );
 
     while let Some(packets) = rx_traintime_packets.recv().await {
         for packet in &packets {
