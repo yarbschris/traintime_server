@@ -1,6 +1,5 @@
 use futures::future::join_all;
 use gtfs_rt_decode::gtfs_rt_types::{FeedEntity, FeedMessage};
-use itertools::Itertools;
 use log::{info, warn};
 use reqwest::Response;
 use std::time::Duration;
@@ -8,7 +7,7 @@ use tokio::sync::{mpsc, watch};
 use tokio::time;
 
 use crate::config;
-use crate::types::{gtfs, static_data::StaticData, traintime_packet};
+use crate::types::{static_data::StaticData, traintime_packet};
 
 pub fn setup_gtfs_rt(
     rx_station_config: watch::Receiver<config::SelectedStationConfig>,
@@ -98,15 +97,4 @@ async fn fetch_gtfs_rt(gtfs_rt_endpoint: &str) -> Result<Response, reqwest::Erro
 async fn decode_gtfs_rt(response: Response) -> Result<FeedMessage, prost::DecodeError> {
     let response_bytes = response.bytes().await.unwrap();
     gtfs_rt_decode::decode::from_bytes(response_bytes)
-}
-
-pub fn accumulate_entities_routes(entities: Vec<FeedEntity>) -> Vec<gtfs::RouteID> {
-    entities.into_iter().fold(Vec::new(), |mut acc, entity| {
-        if let Some(update) = entity.trip_update
-            && let Some(route) = update.trip.route_id
-        {
-            acc.push(gtfs::RouteID(route));
-        }
-        acc.into_iter().unique().collect()
-    })
 }
