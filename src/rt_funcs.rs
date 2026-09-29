@@ -1,7 +1,7 @@
 use futures::future::join_all;
 use gtfs_rt_decode::gtfs_rt_types::{FeedEntity, FeedMessage};
 use log::{info, warn};
-use reqwest::Response;
+use prost::bytes::Bytes;
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 use tokio::time;
@@ -79,22 +79,21 @@ pub async fn gtfs_rt_request_handler(endpoints: Vec<String>) -> Vec<FeedEntity> 
 
 pub async fn fetch_and_decode_gtfs_rt(endpoint: &str) -> Vec<FeedEntity> {
     info!("Fetching and decoding gtfs-rt data");
-    let Ok(response) = fetch_gtfs_rt(endpoint).await else {
+    let Ok(gtfs_rt_bytes) = fetch_gtfs_rt(endpoint).await else {
         panic!("Error Fetching GTFS-RT");
     };
     info!("Fetched gtfs-rt data");
-    let Ok(decoded) = decode_gtfs_rt(response).await else {
+    let Ok(decoded) = decode_gtfs_rt(gtfs_rt_bytes).await else {
         panic!("Error Decoding GTFS-RT");
     };
     info!("Decoded gtfs-rt data");
     decoded.entity
 }
 
-async fn fetch_gtfs_rt(gtfs_rt_endpoint: &str) -> Result<Response, reqwest::Error> {
-    reqwest::get(gtfs_rt_endpoint).await
+async fn fetch_gtfs_rt(gtfs_rt_endpoint: &str) -> Result<Bytes, reqwest::Error> {
+    reqwest::get(gtfs_rt_endpoint).await?.bytes().await
 }
 
-async fn decode_gtfs_rt(response: Response) -> Result<FeedMessage, prost::DecodeError> {
-    let response_bytes = response.bytes().await.unwrap();
+async fn decode_gtfs_rt(response_bytes: Bytes) -> Result<FeedMessage, prost::DecodeError> {
     gtfs_rt_decode::decode::from_bytes(response_bytes)
 }
