@@ -125,26 +125,24 @@ async fn determine_if_endpoint_is_relevant(
     relevant_routes: &[gtfs::RouteID],
 ) -> Option<String> {
     let decoded_entities = rt_funcs::fetch_and_decode_gtfs_rt(endpoint.as_str()).await;
-    if accumulate_entities_routes(decoded_entities)
-        .iter()
-        .any(|x| relevant_routes.contains(x))
-    {
+
+    if endpoint_matches(&decoded_entities, relevant_routes) {
         Some(endpoint)
     } else {
         None
     }
 }
 
-// Given a vector of feed entities, return a vector of all the RouteIDs contained in those feeds
-pub fn accumulate_entities_routes(entities: Vec<FeedEntity>) -> Vec<gtfs::RouteID> {
-    entities.into_iter().fold(Vec::new(), |mut acc, entity| {
-        if let Some(update) = entity.trip_update
-            && let Some(route) = update.trip.route_id
-        {
-            acc.push(gtfs::RouteID(route));
-        }
-        acc.into_iter().unique().collect()
-    })
+// See if a collection of feed entities contains an entity that belongs to a route in relevant_routes
+fn endpoint_matches(entities: &[FeedEntity], relevant_routes: &[gtfs::RouteID]) -> bool {
+    entities
+        .iter()
+        .filter_map(|entity| entity.trip_update.as_ref()?.trip.route_id.as_deref())
+        .any(|route| {
+            relevant_routes
+                .iter()
+                .any(|relevant_route| relevant_route.0 == route)
+        })
 }
 
 #[allow(unused)]
