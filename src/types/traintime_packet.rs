@@ -25,7 +25,7 @@ pub fn feed_entity_to_packet(
     entity: &FeedEntity,
     static_data: &StaticData,
     relevant_stop_ids: &[&gtfs::StopID],
-    now: i64,
+    now: &u64,
 ) -> Option<TraintimePacket> {
     let trip_update = entity.trip_update.as_ref()?;
 
@@ -39,7 +39,7 @@ pub fn feed_entity_to_packet(
         .and_then(|a| a.time)
         .or_else(|| next_update.departure.and_then(|d| d.time))?;
 
-    let mins_until = (arrival_time - now) / 60;
+    let mins_until = (arrival_time - *now as i64) / 60;
     if mins_until.is_negative() {
         return None;
     };

@@ -1,8 +1,8 @@
 use futures::future::join_all;
-use gtfs_rt_decode::gtfs_rt_types::{FeedEntity, FeedMessage};
+use gtfs_rt_decode::gtfs_rt_types::FeedMessage;
 use log::{info, warn};
 use prost::bytes::Bytes;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 use tokio::time;
 
@@ -47,26 +47,29 @@ async fn gtfs_rt_handler(
             continue;
         }
 
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
-
-        let entities = gtfs_rt_request_handler(relevant_endpoints).await;
+        let feed_messages = gtfs_rt_request_handler(relevant_endpoints).await;
         let packets = {
-            let active_static_data = rx_active_static_data.borrow();
-            let relevant_stop_ids =
-                active_static_data.get_relevant_stops_to_station(target_station_name.0.as_str());
+            let active_static_data = &rx_active_static_data.borrow();
 
-            entities
+            let relevant_stop_ids =
+                &active_static_data.get_relevant_stops_to_station(target_station_name.0.as_str());
+
+            feed_messages
                 .iter()
-                .filter_map(|entity| {
-                    traintime_packet::feed_entity_to_packet(
-                        entity,
-                        &active_static_data,
-                        &relevant_stop_ids,
-                        now,
-                    )
+                .flat_map(|message| {
+                    let now = message
+                        .header
+                        .timestamp
+                        .expect("Timestamp missing from feed message");
+
+                    message.entity.iter().filter_map(move |entity| {
+                        traintime_packet::feed_entity_to_packet(
+                            entity,
+                            active_static_data,
+                            relevant_stop_ids,
+                            &now,
+                        )
+                    })
                 })
                 .collect::<Vec<traintime_packet::TraintimePacket>>()
         };
@@ -76,14 +79,14 @@ async fn gtfs_rt_handler(
 }
 
 // For each endpoint, make a request. Put feed messages together, and return
-pub async fn gtfs_rt_request_handler(endpoints: Vec<String>) -> Vec<FeedEntity> {
+pub async fn gtfs_rt_request_handler(endpoints: Vec<String>) -> Vec<FeedMessage> {
     let futures = endpoints
         .iter()
         .map(|endpoint| fetch_and_decode_gtfs_rt(endpoint));
-    join_all(futures).await.concat()
+    join_all(futures).await
 }
 
-pub async fn fetch_and_decode_gtfs_rt(endpoint: &str) -> Vec<FeedEntity> {
+pub async fn fetch_and_decode_gtfs_rt(endpoint: &str) -> FeedMessage {
     info!("Fetching and decoding gtfs-rt data");
     let Ok(gtfs_rt_bytes) = fetch_gtfs_rt(endpoint).await else {
         panic!("Error Fetching GTFS-RT");
@@ -93,7 +96,8 @@ pub async fn fetch_and_decode_gtfs_rt(endpoint: &str) -> Vec<FeedEntity> {
         panic!("Error Decoding GTFS-RT");
     };
     info!("Decoded gtfs-rt data");
-    decoded.entity
+
+    decoded
 }
 
 async fn fetch_gtfs_rt(gtfs_rt_endpoint: &str) -> Result<Bytes, reqwest::Error> {

@@ -7,7 +7,6 @@ use crate::{
 };
 use futures::future::join_all;
 use gtfs_rt_decode::gtfs_rt_types::FeedEntity;
-use itertools::Itertools;
 use log::info;
 use tokio::sync::watch;
 
@@ -124,7 +123,9 @@ async fn determine_if_endpoint_is_relevant(
     endpoint: String,
     relevant_routes: &[gtfs::RouteID],
 ) -> Option<String> {
-    let decoded_entities = rt_funcs::fetch_and_decode_gtfs_rt(endpoint.as_str()).await;
+    let decoded_entities = rt_funcs::fetch_and_decode_gtfs_rt(endpoint.as_str())
+        .await
+        .entity;
 
     if endpoint_matches(&decoded_entities, relevant_routes) {
         Some(endpoint)
