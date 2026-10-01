@@ -1,6 +1,5 @@
 use crate::types::{gtfs, static_data::StaticData};
 use gtfs_rt_decode::gtfs_rt_types::FeedEntity;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 pub struct TraintimePacket {
     route_id: gtfs::RouteID,
@@ -26,6 +25,7 @@ pub fn feed_entity_to_packet(
     entity: &FeedEntity,
     static_data: &StaticData,
     relevant_stop_ids: &[&gtfs::StopID],
+    now: i64,
 ) -> Option<TraintimePacket> {
     let trip_update = entity.trip_update.as_ref()?;
 
@@ -39,10 +39,6 @@ pub fn feed_entity_to_packet(
         .and_then(|a| a.time)
         .or_else(|| next_update.departure.and_then(|d| d.time))?;
 
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64;
     let mins_until = (arrival_time - now) / 60;
     if mins_until.is_negative() {
         return None;

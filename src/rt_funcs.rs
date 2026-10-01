@@ -2,7 +2,7 @@ use futures::future::join_all;
 use gtfs_rt_decode::gtfs_rt_types::{FeedEntity, FeedMessage};
 use log::{info, warn};
 use prost::bytes::Bytes;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, watch};
 use tokio::time;
 
@@ -47,6 +47,11 @@ async fn gtfs_rt_handler(
             continue;
         }
 
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
         let entities = gtfs_rt_request_handler(relevant_endpoints).await;
         let packets = {
             let active_static_data = rx_active_static_data.borrow();
@@ -60,6 +65,7 @@ async fn gtfs_rt_handler(
                         entity,
                         &active_static_data,
                         &relevant_stop_ids,
+                        now,
                     )
                 })
                 .collect::<Vec<traintime_packet::TraintimePacket>>()
