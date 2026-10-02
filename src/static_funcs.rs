@@ -31,13 +31,17 @@ async fn fetch_static_handler(
         gtfs_static_fetch_interval.tick().await;
         match fetch_gtfs_static_data(rx_system_config.clone()).await {
             Ok(response) => {
-                if let Some(new_etag) = response.headers().get("etag") {
-                    if last_etag == new_etag {
-                        info!("No new static data found, skipping update...");
-                        continue;
-                    }
-                    last_etag = new_etag.clone();
+                let new_etag = response.headers().get("etag");
+
+                if should_skip_update(&last_etag, new_etag) {
+                    info!("No new static data found, skipping update...");
+                    continue;
                 }
+
+                if let Some(etag) = new_etag {
+                    last_etag = etag.clone();
+                }
+
                 let static_data =
                     parse_and_filter_gtfs_static_data(response.bytes().await.unwrap());
 
@@ -52,6 +56,16 @@ async fn fetch_static_handler(
             }
         }
     }
+}
+
+// Don't update static data if new etag exists and is same as last_etag, else we should update
+fn should_skip_update(last_etag: &HeaderValue, new: Option<&HeaderValue>) -> bool {
+    if let Some(new_etag) = new
+        && last_etag == new_etag
+    {
+        return true;
+    }
+    false
 }
 
 /// Make a request to the endpoint which provides gtfs static data
