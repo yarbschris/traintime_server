@@ -44,12 +44,21 @@ impl Default for StaticData {
     }
 }
 
+// Build HashMap to Lookup Station Name using Stop ID as key
 pub fn build_stop_lookup(stops: Vec<gtfs::Stop>) -> HashMap<gtfs::StopID, gtfs::StationName> {
     info!("Building Stop Lookup");
     stops
         .into_iter()
         .filter(|stop| !stop.parent_station.is_empty())
         .map(|stop| (stop.stop_id, stop.stop_name))
+        .collect()
+}
+
+// Build HashMap to Lookup RouteID from TripID
+pub fn build_trips_map(trips: Vec<gtfs::Trip>) -> HashMap<gtfs::TripID, gtfs::RouteID> {
+    trips
+        .into_iter()
+        .map(|trip| (trip.trip_id, trip.route_id))
         .collect()
 }
 
