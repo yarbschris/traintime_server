@@ -46,12 +46,15 @@ pub async fn update_endpoints_on_static_data_update(
     mut rx_active_static_data: watch::Receiver<StaticData>,
     tx_station_config: watch::Sender<SelectedStationConfig>,
 ) {
+    let http_client = reqwest::Client::new();
+
     while rx_active_static_data.changed().await.is_ok() {
         let station_name = { tx_station_config.borrow().station_name.clone() };
         let new_relevant_endpoints = SelectedStationConfig::determine_relevant_endpoints(
             &station_name,
             rx_system_config.clone(),
             rx_active_static_data.clone(),
+            &http_client,
         )
         .await;
 
@@ -88,6 +91,7 @@ impl SelectedStationConfig {
         station_name: &StationName,
         rx_system_config: watch::Receiver<TraintimeSystemConfig>,
         rx_active_static_data: watch::Receiver<StaticData>,
+        http_client: &reqwest::Client,
     ) -> Vec<String> {
         info!("Updating relevant endpoints");
         let relevant_routes = {
@@ -100,7 +104,7 @@ impl SelectedStationConfig {
         };
 
         let futures = gtfs_rt_endpoints.iter().map(|endpoint| {
-            determine_if_endpoint_is_relevant(endpoint.to_owned(), &relevant_routes)
+            determine_if_endpoint_is_relevant(endpoint.to_owned(), &relevant_routes, http_client)
         });
 
         join_all(futures)
@@ -122,8 +126,9 @@ impl Default for SelectedStationConfig {
 async fn determine_if_endpoint_is_relevant(
     endpoint: String,
     relevant_routes: &[gtfs::RouteID],
+    http_client: &reqwest::Client,
 ) -> Option<String> {
-    let decoded_entities = rt_funcs::fetch_and_decode_gtfs_rt(endpoint.as_str())
+    let decoded_entities = rt_funcs::fetch_and_decode_gtfs_rt(endpoint.as_str(), http_client)
         .await
         .entity;
 

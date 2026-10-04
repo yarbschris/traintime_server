@@ -26,9 +26,11 @@ async fn fetch_static_handler(
     let mut last_etag: HeaderValue =
         HeaderValue::from_str("none").expect("Ensure default etag is a valid HeaderValue");
 
+    let http_client = reqwest::Client::new();
+
     loop {
         gtfs_static_fetch_interval.tick().await;
-        match fetch_gtfs_static_data(rx_system_config.clone()).await {
+        match fetch_gtfs_static_data(rx_system_config.clone(), &http_client).await {
             Ok(response) => {
                 let new_etag = response.headers().get("etag");
 
@@ -72,11 +74,12 @@ fn should_skip_update(last_etag: &HeaderValue, new: Option<&HeaderValue>) -> boo
 /// Make a request to the endpoint which provides gtfs static data
 async fn fetch_gtfs_static_data(
     rx_system_config: watch::Receiver<TraintimeSystemConfig>,
+    http_client: &reqwest::Client,
 ) -> Result<Response, reqwest::Error> {
     info!("Fetching GTFS Static Data...");
     let gtfs_static_endpoint = rx_system_config.borrow().gtfs_static_endpoint.clone();
 
-    match reqwest::get(&gtfs_static_endpoint).await {
+    match http_client.get(&gtfs_static_endpoint).send().await {
         Ok(response) => {
             // TODO: More concrete HTTP Response handling
             response.error_for_status_ref()?;

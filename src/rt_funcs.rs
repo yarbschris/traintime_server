@@ -29,6 +29,8 @@ async fn gtfs_rt_handler(
     let fetch_interval_seconds = 30;
     let mut gtfs_rt_fetch_interval = time::interval(Duration::from_secs(fetch_interval_seconds));
 
+    let http_client = reqwest::Client::new();
+
     loop {
         gtfs_rt_fetch_interval.tick().await;
 
@@ -47,7 +49,7 @@ async fn gtfs_rt_handler(
             continue;
         }
 
-        let feed_messages = gtfs_rt_request_handler(relevant_endpoints).await;
+        let feed_messages = gtfs_rt_request_handler(relevant_endpoints, &http_client).await;
         let packets = {
             let active_static_data = &rx_active_static_data.borrow();
 
@@ -79,16 +81,22 @@ async fn gtfs_rt_handler(
 }
 
 // For each endpoint, make a request. Put feed messages together, and return
-pub async fn gtfs_rt_request_handler(endpoints: Vec<String>) -> Vec<FeedMessage> {
+pub async fn gtfs_rt_request_handler(
+    endpoints: Vec<String>,
+    http_client: &reqwest::Client,
+) -> Vec<FeedMessage> {
     let futures = endpoints
         .iter()
-        .map(|endpoint| fetch_and_decode_gtfs_rt(endpoint));
+        .map(|endpoint| fetch_and_decode_gtfs_rt(endpoint, http_client));
     join_all(futures).await
 }
 
-pub async fn fetch_and_decode_gtfs_rt(endpoint: &str) -> FeedMessage {
+pub async fn fetch_and_decode_gtfs_rt(
+    endpoint: &str,
+    http_client: &reqwest::Client,
+) -> FeedMessage {
     info!("Fetching and decoding gtfs-rt data");
-    let Ok(gtfs_rt_bytes) = fetch_gtfs_rt(endpoint).await else {
+    let Ok(gtfs_rt_bytes) = fetch_gtfs_rt(endpoint, http_client).await else {
         panic!("Error Fetching GTFS-RT");
     };
     info!("Fetched gtfs-rt data");
@@ -100,8 +108,16 @@ pub async fn fetch_and_decode_gtfs_rt(endpoint: &str) -> FeedMessage {
     decoded
 }
 
-async fn fetch_gtfs_rt(gtfs_rt_endpoint: &str) -> Result<Bytes, reqwest::Error> {
-    reqwest::get(gtfs_rt_endpoint).await?.bytes().await
+async fn fetch_gtfs_rt(
+    gtfs_rt_endpoint: &str,
+    http_client: &reqwest::Client,
+) -> Result<Bytes, reqwest::Error> {
+    http_client
+        .get(gtfs_rt_endpoint)
+        .send()
+        .await?
+        .bytes()
+        .await
 }
 
 async fn decode_gtfs_rt(response_bytes: Bytes) -> Result<FeedMessage, prost::DecodeError> {
