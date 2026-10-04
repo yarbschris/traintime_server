@@ -1,3 +1,4 @@
+use crate::error::GtfsStaticError;
 use crate::gtfs;
 use log::info;
 use prost::bytes::Bytes;
@@ -16,61 +17,51 @@ impl StaticData {
         }
     }
 
-    pub fn build_from_bytes(bytes: Bytes) -> Self {
-        let mut zip_reader = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
-        let mut rdr = csv::Reader::from_reader(zip_reader.by_name("stops.txt").unwrap());
+    pub fn build_from_bytes(bytes: Bytes) -> Result<Self, GtfsStaticError> {
+        let mut zip_reader = zip::ZipArchive::new(std::io::Cursor::new(bytes))?;
+        let mut rdr = csv::Reader::from_reader(zip_reader.by_name("stops.txt")?);
 
         info!("Deserializing Stop Data...");
-        let stops: Vec<gtfs::Stop> = rdr.deserialize().collect::<Result<_, _>>().unwrap();
+        let stops: Vec<gtfs::Stop> = rdr.deserialize().collect::<Result<_, _>>()?;
         drop(rdr);
         let stop_lookup = build_stop_lookup(stops);
 
         info!("Deserializing Trip Data...");
-        let mut rdr = csv::Reader::from_reader(zip_reader.by_name("trips.txt").unwrap());
-        let trips: Vec<gtfs::Trip> = rdr.deserialize().collect::<Result<_, _>>().unwrap();
+        let mut rdr = csv::Reader::from_reader(zip_reader.by_name("trips.txt")?);
+        let trips: Vec<gtfs::Trip> = rdr.deserialize().collect::<Result<_, _>>()?;
         drop(rdr);
         let trip_lookup = build_trips_map(trips);
 
         info!("Deserializing StopTime Data...");
-        let mut rdr = csv::Reader::from_reader(zip_reader.by_name("stop_times.txt").unwrap());
+        let mut rdr = csv::Reader::from_reader(zip_reader.by_name("stop_times.txt")?);
+
+        // Temporary Raw Record which we decode into to save space
         let mut raw_record = csv::StringRecord::new();
-        let headers = rdr
-            .headers()
-            .expect("Headers Missing, Cannot Deserialize")
-            .clone();
+        let headers = rdr.headers()?.clone();
 
         let mut route_lookup: HashMap<gtfs::StationName, Vec<gtfs::RouteID>> = HashMap::new();
 
-        while rdr
-            .read_record(&mut raw_record)
-            .expect("Error reading raw stop time record")
-        {
-            let record: gtfs::StopTime = raw_record
-                .deserialize(Some(&headers))
-                .expect("Could not deserialize stop time record into StopTime");
-            let station_name = stop_lookup
-                .get(&record.stop_id)
-                .expect("Unabled to get station_name")
-                .clone();
-            let route_id = trip_lookup
-                .get(&record.trip_id)
-                .expect("Unable to get route_id");
-
-            route_lookup
-                .entry(station_name)
-                .and_modify(|routes| {
-                    if !routes.contains(route_id) {
-                        routes.push(route_id.clone())
-                    }
-                })
-                .or_insert(vec![route_id.clone()]);
+        while rdr.read_record(&mut raw_record)? {
+            let record: gtfs::StopTime = raw_record.deserialize(Some(&headers))?;
+            if let Some(station_name) = stop_lookup.get(&record.stop_id)
+                && let Some(route_id) = trip_lookup.get(&record.trip_id)
+            {
+                route_lookup
+                    .entry(station_name.clone())
+                    .and_modify(|routes| {
+                        if !routes.contains(route_id) {
+                            routes.push(route_id.clone())
+                        }
+                    })
+                    .or_insert(vec![route_id.clone()]);
+            }
         }
 
         info!("Building static data...");
-        StaticData {
+        Ok(StaticData {
             stop_lookup,
             route_lookup,
-        }
+        })
     }
 
     pub fn get_relevant_stops_to_station(&self, target_stop_name: &str) -> Vec<&gtfs::StopID> {

@@ -44,13 +44,22 @@ async fn fetch_static_handler(
                 }
 
                 info!("Building retained static data structure");
-                let static_data =
-                    static_data::StaticData::build_from_bytes(response.bytes().await.unwrap());
-
-                info!("Sending retained static data");
-                tx_active_static_data
-                    .send(static_data)
-                    .expect("Failed to send static data from static data fetch handler");
+                match static_data::StaticData::build_from_bytes(response.bytes().await.unwrap()) {
+                    Ok(static_data) => {
+                        info!("Sending retained static data");
+                        tx_active_static_data
+                            .send(static_data)
+                            .inspect_err(|e| {
+                                error!(
+                                    "Failed to send static data from static data fetch handler: {e}"
+                                )
+                            })
+                            .ok();
+                    }
+                    Err(e) => {
+                        error!("Error constructing static data: {e}");
+                    }
+                }
             }
 
             Err(e) => {

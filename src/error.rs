@@ -26,3 +26,34 @@ impl From<prost::DecodeError> for GtfsRtError {
         Self::Decode(e)
     }
 }
+
+#[derive(Debug)]
+pub enum GtfsStaticError {
+    Zip(zip::result::ZipError),
+    Csv(csv::Error),
+}
+
+impl std::fmt::Display for GtfsStaticError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Zip(e) => write!(f, "error interacting with GTFS-Static zip file: {e}"),
+            Self::Csv(e) => write!(
+                f,
+                "error interacting with GTFS-Static csv representation: {e}"
+            ),
+        }
+    }
+}
+impl std::error::Error for GtfsStaticError {}
+
+impl From<zip::result::ZipError> for GtfsStaticError {
+    fn from(e: zip::result::ZipError) -> Self {
+        Self::Zip(e)
+    }
+}
+
+impl From<csv::Error> for GtfsStaticError {
+    fn from(e: csv::Error) -> Self {
+        Self::Csv(e)
+    }
+}
