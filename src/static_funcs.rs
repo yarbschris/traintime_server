@@ -23,8 +23,7 @@ async fn fetch_static_handler(
 ) {
     let mut gtfs_static_fetch_interval = tokio::time::interval(Duration::from_hours(1));
     // To compare with fetched data etag to avoid uneccessary updates
-    let mut last_etag: HeaderValue =
-        HeaderValue::from_str("none").expect("Ensure default etag is a valid HeaderValue");
+    let mut last_etag: Option<HeaderValue> = None;
 
     let http_client = reqwest::Client::new();
 
@@ -32,15 +31,10 @@ async fn fetch_static_handler(
         gtfs_static_fetch_interval.tick().await;
         match fetch_gtfs_static_data(rx_system_config.clone(), &http_client).await {
             Ok(response) => {
-                let new_etag = response.headers().get("etag");
-
-                if should_skip_update(&last_etag, new_etag) {
+                let new_etag = response.headers().get("etag").cloned();
+                if should_skip_update(&last_etag, &new_etag) {
                     info!("No new static data found, skipping update...");
                     continue;
-                }
-
-                if let Some(etag) = new_etag {
-                    last_etag = etag.clone();
                 }
 
                 info!("Building retained static data structure");
@@ -55,6 +49,7 @@ async fn fetch_static_handler(
                                 )
                             })
                             .ok();
+                        last_etag = new_etag;
                     }
                     Err(e) => {
                         error!("Error constructing static data: {e}");
@@ -71,13 +66,19 @@ async fn fetch_static_handler(
 }
 
 // Don't update static data if new etag exists and is same as last_etag, else we should update
-fn should_skip_update(last_etag: &HeaderValue, new: Option<&HeaderValue>) -> bool {
-    if let Some(new_etag) = new
-        && last_etag == new_etag
-    {
-        return true;
+fn should_skip_update(last: &Option<HeaderValue>, new: &Option<HeaderValue>) -> bool {
+    match (last, new) {
+        (Some(last_etag), Some(new_etag)) => {
+            if last_etag == new_etag {
+                return true;
+            }
+            false
+        }
+        // Always attempt rebuild if we don't have a previous etag
+        (None, _) => false,
+        // Do not attempt rebuild if there is no new etag
+        (Some(_), None) => true,
     }
-    false
 }
 
 /// Make a request to the endpoint which provides gtfs static data
