@@ -1,4 +1,5 @@
 pub mod config;
+pub mod error;
 pub mod rt_funcs;
 pub mod static_funcs;
 pub mod types;

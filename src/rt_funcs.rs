@@ -7,6 +7,7 @@ use tokio::sync::{mpsc, watch};
 use tokio::time;
 
 use crate::config;
+use crate::error::GtfsRtError;
 use crate::types::{static_data::StaticData, traintime_packet};
 
 pub fn setup_gtfs_rt(
@@ -62,7 +63,7 @@ async fn gtfs_rt_handler(
                     let now = message
                         .header
                         .timestamp
-                        .expect("Timestamp missing from feed message");
+                        .expect("Timestamp missing from feed message, should never happen.");
 
                     message.entity.iter().filter_map(move |entity| {
                         traintime_packet::feed_entity_to_packet(
@@ -88,24 +89,30 @@ pub async fn gtfs_rt_request_handler(
     let futures = endpoints
         .iter()
         .map(|endpoint| fetch_and_decode_gtfs_rt(endpoint, http_client));
-    join_all(futures).await
+    join_all(futures)
+        .await
+        .into_iter()
+        .zip(&endpoints)
+        .filter_map(|(result, endpoint)| {
+            result
+                .inspect_err(|e| warn!("Skipping {endpoint}: {e}"))
+                .ok()
+        })
+        .collect()
 }
 
 pub async fn fetch_and_decode_gtfs_rt(
     endpoint: &str,
     http_client: &reqwest::Client,
-) -> FeedMessage {
+) -> Result<FeedMessage, GtfsRtError> {
     info!("Fetching and decoding gtfs-rt data");
-    let Ok(gtfs_rt_bytes) = fetch_gtfs_rt(endpoint, http_client).await else {
-        panic!("Error Fetching GTFS-RT");
-    };
+    let gtfs_rt_bytes = fetch_gtfs_rt(endpoint, http_client).await?;
+
     info!("Fetched gtfs-rt data");
-    let Ok(decoded) = decode_gtfs_rt(gtfs_rt_bytes).await else {
-        panic!("Error Decoding GTFS-RT");
-    };
+    let decoded = decode_gtfs_rt(gtfs_rt_bytes).await?;
     info!("Decoded gtfs-rt data");
 
-    decoded
+    Ok(decoded)
 }
 
 async fn fetch_gtfs_rt(
@@ -116,6 +123,7 @@ async fn fetch_gtfs_rt(
         .get(gtfs_rt_endpoint)
         .send()
         .await?
+        .error_for_status()?
         .bytes()
         .await
 }

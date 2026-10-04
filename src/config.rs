@@ -7,7 +7,7 @@ use crate::{
 };
 use futures::future::join_all;
 use gtfs_rt_decode::gtfs_rt_types::FeedEntity;
-use log::info;
+use log::{info, warn};
 use tokio::sync::watch;
 
 const NYC_SUBWAY_CONFIG: &str = include_str!("../system_configs/nyc_subway.yml");
@@ -130,6 +130,8 @@ async fn determine_if_endpoint_is_relevant(
 ) -> Option<String> {
     let decoded_entities = rt_funcs::fetch_and_decode_gtfs_rt(endpoint.as_str(), http_client)
         .await
+        .inspect_err(|e| warn!("Fetch / Decode Error in determine_if_endpoint_is_relevant: {e}"))
+        .ok()?
         .entity;
 
     if endpoint_matches(&decoded_entities, relevant_routes) {
