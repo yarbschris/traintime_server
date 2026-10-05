@@ -82,7 +82,7 @@ async fn gtfs_rt_handler(
 }
 
 // For each endpoint, make a request. Put feed messages together, and return
-pub async fn gtfs_rt_request_handler(
+async fn gtfs_rt_request_handler(
     endpoints: Vec<String>,
     http_client: &reqwest::Client,
 ) -> Vec<FeedMessage> {

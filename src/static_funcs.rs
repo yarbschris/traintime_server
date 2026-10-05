@@ -5,16 +5,17 @@ use std::time::Duration;
 use tokio::sync::watch;
 
 use crate::config::TraintimeSystemConfig;
+use crate::error::GtfsStaticError;
 use crate::types::static_data::StaticData;
 
 pub fn setup_gtfs_static(
     tx_active_static_data: watch::Sender<StaticData>,
     rx_system_config: watch::Receiver<TraintimeSystemConfig>,
-) {
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(fetch_static_handler(
         tx_active_static_data,
         rx_system_config,
-    ));
+    ))
 }
 
 async fn fetch_static_handler(
@@ -29,51 +30,47 @@ async fn fetch_static_handler(
 
     loop {
         gtfs_static_fetch_interval.tick().await;
-        match fetch_gtfs_static_data(rx_system_config.clone(), &http_client).await {
-            Ok(response) => {
-                let new_etag = response.headers().get("etag").cloned();
-                if should_skip_update(&last_etag, &new_etag) {
-                    info!("No new static data found, skipping update...");
-                    continue;
-                }
-
-                info!("Building retained static data structure");
-                match static_data::StaticData::build_from_bytes(response.bytes().await.unwrap()) {
-                    Ok(static_data) => {
-                        info!("Sending retained static data");
-                        tx_active_static_data
-                            .send(static_data)
-                            .inspect_err(|e| {
-                                error!(
-                                    "Failed to send static data from static data fetch handler: {e}"
-                                )
-                            })
-                            .ok();
-                        last_etag = new_etag;
-                    }
-                    Err(e) => {
-                        error!("Error constructing static data: {e}");
-                    }
-                }
-            }
-
-            Err(e) => {
-                print_static_fetch_error_message(e);
-                continue;
-            }
+        if let Err(e) = refresh_static_data(
+            &http_client,
+            &rx_system_config,
+            &tx_active_static_data,
+            &mut last_etag,
+        )
+        .await
+        {
+            error!("Error refreshing static data, will retry on regular interval: {e}");
         }
     }
 }
 
+// Fetch -> Check if update is needed -> Build retained structure -> Send -> Update etag
+async fn refresh_static_data(
+    http_client: &reqwest::Client,
+    rx_system_config: &watch::Receiver<TraintimeSystemConfig>,
+    tx_active_static_data: &watch::Sender<StaticData>,
+    last_etag: &mut Option<HeaderValue>,
+) -> Result<(), GtfsStaticError> {
+    let response = fetch_gtfs_static_data(rx_system_config.clone(), http_client).await?;
+    let new_etag = response.headers().get("etag").cloned();
+    if should_skip_update(last_etag, &new_etag) {
+        info!("No new static data found, skipping update...");
+        return Ok(());
+    }
+
+    info!("Building retained static data strucutre");
+    let static_data = static_data::StaticData::build_from_bytes(response.bytes().await?)?;
+    info!("Sending retained static data");
+    if let Err(e) = tx_active_static_data.send(static_data) {
+        return Err(GtfsStaticError::Send(e));
+    }
+    *last_etag = new_etag;
+    Ok(())
+}
+
 // Don't update static data if new etag exists and is same as last_etag, else we should update
-fn should_skip_update(last: &Option<HeaderValue>, new: &Option<HeaderValue>) -> bool {
+pub fn should_skip_update(last: &Option<HeaderValue>, new: &Option<HeaderValue>) -> bool {
     match (last, new) {
-        (Some(last_etag), Some(new_etag)) => {
-            if last_etag == new_etag {
-                return true;
-            }
-            false
-        }
+        (Some(last_etag), Some(new_etag)) => last_etag == new_etag,
         // Always attempt rebuild if we don't have a previous etag
         (None, _) => false,
         // Do not attempt rebuild if there is no new etag
@@ -81,7 +78,7 @@ fn should_skip_update(last: &Option<HeaderValue>, new: &Option<HeaderValue>) -> 
     }
 }
 
-/// Make a request to the endpoint which provides gtfs static data
+// Make a request to the endpoint which provides gtfs static data
 async fn fetch_gtfs_static_data(
     rx_system_config: watch::Receiver<TraintimeSystemConfig>,
     http_client: &reqwest::Client,
@@ -89,20 +86,11 @@ async fn fetch_gtfs_static_data(
     info!("Fetching GTFS Static Data...");
     let gtfs_static_endpoint = rx_system_config.borrow().gtfs_static_endpoint.clone();
 
-    match http_client.get(&gtfs_static_endpoint).send().await {
-        Ok(response) => {
-            // TODO: More concrete HTTP Response handling
-            response.error_for_status_ref()?;
-            info!("Fetched GTFS Static Data!");
-            Ok(response)
-        }
-        Err(e) => Err(e),
-    }
-}
-
-fn print_static_fetch_error_message(e: reqwest::Error) {
-    error!(
-        "Failed to fetch gtfs static data.\nError: {}\nFetch will retry on regular fetch interval...",
-        e.without_url(),
-    )
+    let response = http_client
+        .get(&gtfs_static_endpoint)
+        .send()
+        .await?
+        .error_for_status()?;
+    info!("Fetched GTFS Static Data!");
+    Ok(response)
 }

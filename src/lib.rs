@@ -32,9 +32,10 @@ pub async fn start() -> mpsc::Receiver<Vec<TraintimePacket>> {
     // TODO: We want to dynamically change station name, rn we just set it manually
     tx_station_config.send_modify(|x| x.station_name = gtfs::StationName::from("East Broadway"));
 
-    static_funcs::setup_gtfs_static(tx_active_static_data, rx_system_config.clone());
+    let _static_join_handle =
+        static_funcs::setup_gtfs_static(tx_active_static_data, rx_system_config.clone());
 
-    tokio::spawn(config::update_endpoints_on_static_data_update(
+    let _config_join_handle = tokio::spawn(config::update_endpoints_on_static_data_update(
         rx_system_config,
         rx_active_static_data.clone(),
         tx_station_config.clone(),
@@ -47,7 +48,7 @@ pub async fn start() -> mpsc::Receiver<Vec<TraintimePacket>> {
         .await
         .unwrap();
 
-    rt_funcs::setup_gtfs_rt(
+    let _rt_join_handle = rt_funcs::setup_gtfs_rt(
         rx_station_config,
         rx_active_static_data,
         tx_traintime_packets,

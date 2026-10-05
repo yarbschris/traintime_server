@@ -1,3 +1,6 @@
+use crate::types::static_data::StaticData;
+use tokio::sync::watch;
+
 #[derive(Debug)]
 pub enum GtfsRtError {
     Fetch(reqwest::Error),
@@ -31,16 +34,20 @@ impl From<prost::DecodeError> for GtfsRtError {
 pub enum GtfsStaticError {
     Zip(zip::result::ZipError),
     Csv(csv::Error),
+    Fetch(reqwest::Error),
+    Send(watch::error::SendError<StaticData>),
 }
 
 impl std::fmt::Display for GtfsStaticError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Zip(e) => write!(f, "error interacting with GTFS-Static zip file: {e}"),
+            Self::Zip(e) => write!(f, "error interacting with gtfs-static zip file: {e}"),
             Self::Csv(e) => write!(
                 f,
-                "error interacting with GTFS-Static csv representation: {e}"
+                "error interacting with gtfs-static csv representation: {e}"
             ),
+            Self::Fetch(e) => write!(f, "error fetching gtfs-static: {e}"),
+            Self::Send(e) => write!(f, "error sending gtfs-static: {e}"),
         }
     }
 }
@@ -55,5 +62,17 @@ impl From<zip::result::ZipError> for GtfsStaticError {
 impl From<csv::Error> for GtfsStaticError {
     fn from(e: csv::Error) -> Self {
         Self::Csv(e)
+    }
+}
+
+impl From<reqwest::Error> for GtfsStaticError {
+    fn from(e: reqwest::Error) -> Self {
+        Self::Fetch(e)
+    }
+}
+
+impl From<watch::error::SendError<StaticData>> for GtfsStaticError {
+    fn from(e: watch::error::SendError<StaticData>) -> Self {
+        Self::Send(e)
     }
 }
