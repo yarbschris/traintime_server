@@ -1,6 +1,6 @@
 use futures::future::join_all;
 use gtfs_rt_decode::gtfs_rt_types::FeedMessage;
-use log::{info, warn};
+use log::{error, info, warn};
 use prost::bytes::Bytes;
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
@@ -77,7 +77,11 @@ async fn gtfs_rt_handler(
                 .collect::<Vec<traintime_packet::TraintimePacket>>()
         };
 
-        tx_traintime_packets.send(packets).await.unwrap();
+        tx_traintime_packets.send(packets).await.inspect_err(|e| {
+            error!(
+                "error sending traintime packets, retrying packet refresh in {fetch_interval_seconds} seconds: {e}"
+            )
+        }).ok();
     }
 }
 
