@@ -76,13 +76,9 @@ impl SelectedStationConfig {
     pub fn get_relevant_routes(
         station_name: &StationName,
         mut rx_active_static_data: watch::Receiver<StaticData>,
-    ) -> Vec<gtfs::RouteID> {
+    ) -> Option<Vec<gtfs::RouteID>> {
         let static_data = rx_active_static_data.borrow_and_update();
-        static_data
-            .route_lookup
-            .get(station_name)
-            .expect("No relevant routes found, please check config")
-            .clone()
+        static_data.route_lookup.get(station_name).cloned()
     }
 
     // Get endpoints relevant to the station name. This should be done when 1) New static data is fetched,
@@ -96,7 +92,10 @@ impl SelectedStationConfig {
         info!("Updating relevant endpoints");
         let relevant_routes = {
             SelectedStationConfig::get_relevant_routes(station_name, rx_active_static_data.clone())
-        };
+        }
+        // TODO: This lookup should never fail unless the static data is really messed up (not
+        // within our control), but should be handled
+        .unwrap();
 
         let gtfs_rt_endpoints = {
             let system_config = rx_system_config.borrow();
