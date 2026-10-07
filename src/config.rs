@@ -157,3 +157,70 @@ pub enum SupportedTransitSystem {
     NycSubway,
     BostonTransit,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gtfs_rt_decode::gtfs_rt_types::{TripDescriptor, TripUpdate};
+
+    fn trip_update_entity(route_id: Option<&str>) -> FeedEntity {
+        FeedEntity {
+            trip_update: Some(TripUpdate {
+                trip: TripDescriptor {
+                    route_id: route_id.map(String::from),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn routes(route_ids: &[&str]) -> Vec<gtfs::RouteID> {
+        route_ids
+            .iter()
+            .map(|route_id| gtfs::RouteID(String::from(*route_id)))
+            .collect()
+    }
+
+    #[test]
+    fn endpoint_matches_when_an_entity_is_on_a_relevant_route() {
+        let entities = [trip_update_entity(Some("A")), trip_update_entity(Some("F"))];
+
+        assert!(endpoint_matches(&entities, &routes(&["F", "M"])));
+    }
+
+    #[test]
+    fn endpoint_does_not_match_when_no_entity_is_on_a_relevant_route() {
+        let entities = [trip_update_entity(Some("A")), trip_update_entity(Some("C"))];
+
+        assert!(!endpoint_matches(&entities, &routes(&["F", "M"])));
+    }
+
+    #[test]
+    fn endpoint_does_not_match_entities_without_a_route() {
+        // An entity with no trip update (vehicle position, alert) and one with no route_id
+        let entities = [FeedEntity::default(), trip_update_entity(None)];
+
+        assert!(!endpoint_matches(&entities, &routes(&["F"])));
+    }
+
+    #[test]
+    fn endpoint_does_not_match_without_entities_or_relevant_routes() {
+        assert!(!endpoint_matches(&[], &routes(&["F"])));
+        assert!(!endpoint_matches(&[trip_update_entity(Some("F"))], &[]));
+    }
+
+    #[test]
+    fn bundled_system_configs_parse() {
+        for system in [
+            SupportedTransitSystem::NycSubway,
+            SupportedTransitSystem::BostonTransit,
+        ] {
+            let config = TraintimeSystemConfig::read_config_by_system(system);
+
+            assert!(!config.gtfs_static_endpoint.is_empty());
+            assert!(!config.gtfs_rt_endpoints.is_empty());
+        }
+    }
+}

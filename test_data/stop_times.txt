@@ -1,0 +1,16 @@
+trip_id,stop_id,arrival_time,departure_time,stop_sequence
+test_trip_id_1,101S,08:00:00,08:00:00,1
+test_trip_id_2,101S,08:01:00,08:01:00,1
+test_trip_id_3,101N,08:02:00,08:02:00,1
+test_trip_id_4,101N,08:03:00,08:03:00,1
+test_trip_id_5,201N,08:04:00,08:04:00,1
+test_trip_id_6,201S,08:05:00,08:05:00,1
+test_trip_id_7,201N,08:06:00,08:06:00,1
+test_trip_id_8,201S,08:07:00,08:07:00,1
+test_trip_id_9,201N,08:08:00,08:08:00,1
+test_trip_id_10,201S,08:09:00,08:09:00,1
+test_trip_id_11,201S,08:10:00,08:10:00,1
+test_trip_id_12,301N,08:11:00,08:11:00,1
+test_trip_id_13,401N,08:12:00,08:12:00,1
+test_trip_id_missing,101N,08:13:00,08:13:00,1
+test_trip_id_6,999N,08:14:00,08:14:00,2

@@ -1,0 +1,11 @@
+stop_id,stop_name,stop_lat,stop_lon,location_type,parent_station
+101,Test Stop 1,0,0,1,
+101N,Test Stop 1,0,0,,101
+101S,Test Stop 1,0,0,,101
+201,Test Stop 2,0,0,1,
+201N,Test Stop 2,0,0,,201
+201S,Test Stop 2,0,0,,201
+301,Test Stop 3,0,0,1,
+301N,Test Stop 3,0,0,,301
+401,Test Stop 3,0,0,1,
+401N,Test Stop 3,0,0,,401
