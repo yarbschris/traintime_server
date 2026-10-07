@@ -2,10 +2,10 @@ use crate::types::{gtfs, static_data::StaticData};
 use gtfs_rt_decode::gtfs_rt_types::FeedEntity;
 
 pub struct TraintimePacket {
-    route_id: gtfs::RouteID,
-    trip_headsign: gtfs::StationName,
-    mins_until_arrival: i64,
-    delay: Option<i32>,
+    pub route_id: gtfs::RouteID,
+    pub trip_headsign: gtfs::StationName,
+    pub mins_until_arrival: i64,
+    pub delay: Option<i32>,
 }
 
 impl std::fmt::Display for TraintimePacket {

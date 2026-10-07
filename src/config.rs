@@ -141,7 +141,7 @@ async fn determine_if_endpoint_is_relevant(
 }
 
 // See if a collection of feed entities contains an entity that belongs to a route in relevant_routes
-fn endpoint_matches(entities: &[FeedEntity], relevant_routes: &[gtfs::RouteID]) -> bool {
+pub fn endpoint_matches(entities: &[FeedEntity], relevant_routes: &[gtfs::RouteID]) -> bool {
     entities
         .iter()
         .filter_map(|entity| entity.trip_update.as_ref()?.trip.route_id.as_deref())

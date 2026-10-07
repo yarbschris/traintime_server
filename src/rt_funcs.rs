@@ -113,7 +113,7 @@ pub async fn fetch_and_decode_gtfs_rt(
     let gtfs_rt_bytes = fetch_gtfs_rt(endpoint, http_client).await?;
 
     info!("Fetched gtfs-rt data");
-    let decoded = decode_gtfs_rt(gtfs_rt_bytes).await?;
+    let decoded = decode_gtfs_rt(gtfs_rt_bytes)?;
     info!("Decoded gtfs-rt data");
 
     Ok(decoded)
@@ -132,6 +132,6 @@ async fn fetch_gtfs_rt(
         .await
 }
 
-async fn decode_gtfs_rt(response_bytes: Bytes) -> Result<FeedMessage, prost::DecodeError> {
+pub fn decode_gtfs_rt(response_bytes: Bytes) -> Result<FeedMessage, prost::DecodeError> {
     gtfs_rt_decode::decode::from_bytes(response_bytes)
 }
