@@ -224,7 +224,7 @@ fn packets_are_built_for_every_platform_of_the_station() {
     let packets = packets_at(&message, &static_data(), GRAND_CENTRAL);
     let arrivals = arrivals_by_route_and_headsign(&packets);
 
-    let expected: [(&str, &str, &[i64]); 16] = [
+    let expected: [(&str, &str, &[i64]); 15] = [
         // 631N / 631S
         ("4", "149 St-Hostos", &[21]),
         (
@@ -265,8 +265,7 @@ fn packets_are_built_for_every_platform_of_the_station() {
         ),
         ("7", "Flushing-Main St", &[0, 9, 15, 21, 27, 34]),
         ("7X", "Flushing-Main St", &[2, 6, 12, 18, 24, 30, 37]),
-        // 901S, shuttles terminating here
-        ("GS", GRAND_CENTRAL, &[2, 5, 8, 11, 15, 18, 22, 25, 29, 33]),
+        // 901N, shuttles leaving for Times Sq. The ten terminating at 901S are dropped
         (
             "GS",
             "Times Sq-42 St",
@@ -283,7 +282,7 @@ fn packets_are_built_for_every_platform_of_the_station() {
         })
         .collect();
 
-    assert_eq!(packets.len(), 134);
+    assert_eq!(packets.len(), 124);
     assert_eq!(arrivals, expected);
 }
 
@@ -381,28 +380,57 @@ fn headsign_falls_back_to_the_stop_id_when_the_last_stop_is_not_in_stop_lookup()
     ]);
 
     let packets = packets_at(&message, &static_data, GRAND_CENTRAL);
-    let (known, unknown): (Vec<&TraintimePacket>, Vec<&TraintimePacket>) = packets
-        .iter()
-        .partition(|packet| packet.trip_headsign.0 == GRAND_CENTRAL);
 
     // Same packets as with the full stop_lookup, none dropped
-    assert_eq!(packets.len(), 134);
-    // Only the shuttles terminating at Grand Central have a headsign that can be looked up
-    assert_eq!(known.len(), 10);
-    assert!(known.iter().all(|packet| packet.route_id.0 == "GS"));
-    assert_eq!(unknown.len(), 124);
+    assert_eq!(packets.len(), 124);
+    // No trip shown at Grand Central ends there, so no headsign can be looked up
     assert!(
-        unknown
+        packets
             .iter()
             .all(|packet| packet.trip_headsign.0.starts_with("Unknown, ID: "))
     );
     // The ten shuttles leaving for Times Sq
     assert_eq!(
-        unknown
+        packets
             .iter()
             .filter(|packet| packet.trip_headsign.0 == "Unknown, ID: 902N")
             .count(),
         10
+    );
+}
+
+// A rider cannot board a train that ends its trip at their station. The shuttle's return run is a
+// separate trip in the feed, see packets_are_built_for_trains_originating_at_the_station.
+#[test]
+fn no_packets_for_trains_terminating_at_the_station() {
+    let message = decode_fixture();
+    let static_data = static_data();
+    let relevant_stop_ids = static_data.get_relevant_stops_to_station(GRAND_CENTRAL);
+
+    // Trip updates whose last stop is 901S, the shuttle platform trains from Times Sq end at
+    let terminating: Vec<&FeedEntity> = message
+        .entity
+        .iter()
+        .filter(|entity| {
+            entity
+                .trip_update
+                .as_ref()
+                .and_then(|trip_update| trip_update.stop_time_update.last())
+                .and_then(|last_stop| last_stop.stop_id.as_deref())
+                == Some("901S")
+        })
+        .collect();
+
+    assert_eq!(terminating.len(), 10);
+    assert!(terminating.iter().all(|entity| {
+        feed_entity_to_packet(entity, &static_data, &relevant_stop_ids, &FEED_TIMESTAMP).is_none()
+    }));
+
+    let packets = packets_at(&message, &static_data, GRAND_CENTRAL);
+    assert!(
+        packets
+            .iter()
+            .all(|packet| packet.trip_headsign.0 != GRAND_CENTRAL)
     );
 }
 
@@ -414,8 +442,8 @@ fn packets_are_built_for_trains_originating_at_the_station() {
     let packets = packets_at(&message, &static_data(), GRAND_CENTRAL);
     let arrivals = arrivals_by_route_and_headsign(&packets);
 
-    // 134 after dropping trips that have already departed
-    assert_eq!(packets.len(), 134);
+    // 124 after dropping trips that have already departed or that end here
+    assert_eq!(packets.len(), 124);
     assert_eq!(
         arrivals.get(&(String::from("GS"), String::from("Times Sq-42 St"))),
         Some(&vec![0, 3, 6, 10, 13, 17, 20, 24, 28, 32])

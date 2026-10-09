@@ -28,6 +28,8 @@ pub fn feed_entity_to_packet(
     now: &u64,
 ) -> Option<TraintimePacket> {
     let trip_update = entity.trip_update.as_ref()?;
+
+    // Drop Canceled / Deleted Trips
     if matches!(
         trip_update.trip.schedule_relationship(),
         trip_descriptor::ScheduleRelationship::Canceled
@@ -36,6 +38,7 @@ pub fn feed_entity_to_packet(
         return None;
     }
 
+    // Get next update where the stop_id matches a stop_id we we are looking for
     let next_update = trip_update.stop_time_update.iter().find(|update| {
         !matches!(
             update.schedule_relationship(),
@@ -44,32 +47,44 @@ pub fn feed_entity_to_packet(
             && relevant_stop_ids.contains(&&gtfs::StopID(update.stop_id.clone().unwrap()))
     })?;
 
+    let last_stop_id = trip_update
+        .stop_time_update
+        .iter()
+        .last()?
+        .clone()
+        .stop_id?; // TODO: Don't want to drop packet if the last stop_id is missing (?)
+
+    // We drop the packet if the station is the end station of the trip, we only want to show when
+    // the rider can board (Grand Central <-> Times Sq. 42nd is a good example of this happening)
+    if &last_stop_id == next_update.stop_id.as_ref()? {
+        return None;
+    }
+
+    // Arrival time takes precedence. If there is no arrival time (for example, if we are looking at
+    // an originating station), then we use the departure time. If neither of these times are
+    // available, packet is dropped.
     let arrival_time = next_update
         .arrival
         .and_then(|a| a.time)
         .or_else(|| next_update.departure.and_then(|d| d.time))?;
 
+    // Drop packets where train has already departed
     let secs_until = arrival_time - *now as i64;
     if secs_until.is_negative() {
         return None;
     };
     let mins_until = secs_until / 60;
 
-    let stop_id = trip_update
-        .stop_time_update
-        .iter()
-        .last()?
-        .clone()
-        .stop_id?;
-
     Some(TraintimePacket {
         route_id: gtfs::RouteID(trip_update.trip.route_id.as_ref()?.clone()),
         trip_headsign: static_data
             .stop_lookup
-            .get(&stop_id)
+            .get(&last_stop_id)
             // if a trip's last top stop_id is not in stop_lookup, simply use unknown
             // TODO: Can this be more efficient (String alloc + Clone rn)
-            .unwrap_or(&gtfs::StationName(String::from("Unknown, ID: ") + &stop_id))
+            .unwrap_or(&gtfs::StationName(
+                String::from("Unknown, ID: ") + &last_stop_id,
+            ))
             .clone(),
         mins_until_arrival: mins_until,
         delay: next_update
@@ -143,6 +158,11 @@ mod tests {
         }
     }
 
+    // A stop after Test Stop 2, so the trip does not end where the rider is waiting
+    fn last_stop() -> StopTimeUpdate {
+        stop_time_update("301N", event(900, Some(0)), None)
+    }
+
     // Packet for a rider waiting at Test Stop 2
     fn packet_at_test_stop_2(entity: &FeedEntity) -> Option<TraintimePacket> {
         let relevant_stop_id = gtfs::StopID(String::from("201N"));
@@ -173,7 +193,10 @@ mod tests {
     fn minutes_until_arrival_round_down() {
         let entity = entity(
             Some("F"),
-            vec![stop_time_update("201N", event(659, Some(0)), None)],
+            vec![
+                stop_time_update("201N", event(659, Some(0)), None),
+                last_stop(),
+            ],
         );
 
         let packet = packet_at_test_stop_2(&entity).expect("packet should be built");
@@ -189,7 +212,10 @@ mod tests {
         });
         let entity = entity(
             Some("F"),
-            vec![stop_time_update("201N", arrival, event(120, None))],
+            vec![
+                stop_time_update("201N", arrival, event(120, None)),
+                last_stop(),
+            ],
         );
 
         let packet = packet_at_test_stop_2(&entity).expect("packet should be built");
@@ -202,7 +228,10 @@ mod tests {
     fn departure_time_is_used_when_there_is_no_arrival() {
         let entity = entity(
             Some("F"),
-            vec![stop_time_update("201N", None, event(120, None))],
+            vec![
+                stop_time_update("201N", None, event(120, None)),
+                last_stop(),
+            ],
         );
 
         let packet = packet_at_test_stop_2(&entity).expect("packet should be built");
@@ -229,11 +258,28 @@ mod tests {
         assert!(packet_at_test_stop_2(&entity).is_none());
     }
 
+    // A rider cannot board a train that ends its trip at their stop
+    #[test]
+    fn no_packet_when_the_trip_ends_at_the_relevant_stop() {
+        let entity = entity(
+            Some("F"),
+            vec![
+                stop_time_update("101N", event(300, Some(0)), None),
+                stop_time_update("201N", event(600, Some(0)), None),
+            ],
+        );
+
+        assert!(packet_at_test_stop_2(&entity).is_none());
+    }
+
     #[test]
     fn no_packet_when_the_train_has_already_arrived() {
         let entity = entity(
             Some("F"),
-            vec![stop_time_update("201N", event(-120, Some(0)), None)],
+            vec![
+                stop_time_update("201N", event(-120, Some(0)), None),
+                last_stop(),
+            ],
         );
 
         assert!(packet_at_test_stop_2(&entity).is_none());
@@ -241,7 +287,10 @@ mod tests {
 
     #[test]
     fn no_packet_when_stop_has_no_arrival_or_departure_time() {
-        let entity = entity(Some("F"), vec![stop_time_update("201N", None, None)]);
+        let entity = entity(
+            Some("F"),
+            vec![stop_time_update("201N", None, None), last_stop()],
+        );
 
         assert!(packet_at_test_stop_2(&entity).is_none());
     }
@@ -250,7 +299,10 @@ mod tests {
     fn no_packet_without_a_route_id() {
         let entity = entity(
             None,
-            vec![stop_time_update("201N", event(600, Some(0)), None)],
+            vec![
+                stop_time_update("201N", event(600, Some(0)), None),
+                last_stop(),
+            ],
         );
 
         assert!(packet_at_test_stop_2(&entity).is_none());
@@ -283,7 +335,10 @@ mod tests {
         ] {
             let mut entity = entity(
                 Some("F"),
-                vec![stop_time_update("201N", event(600, Some(0)), None)],
+                vec![
+                    stop_time_update("201N", event(600, Some(0)), None),
+                    last_stop(),
+                ],
             );
             entity
                 .trip_update
@@ -304,10 +359,7 @@ mod tests {
         // A skipped stop may still carry times
         let mut skipped = stop_time_update("201N", event(600, Some(0)), None);
         skipped.set_schedule_relationship(stop_time_update::ScheduleRelationship::Skipped);
-        let entity = entity(
-            Some("F"),
-            vec![skipped, stop_time_update("301N", event(900, Some(0)), None)],
-        );
+        let entity = entity(Some("F"), vec![skipped, last_stop()]);
 
         assert!(packet_at_test_stop_2(&entity).is_none());
     }
@@ -318,7 +370,11 @@ mod tests {
         skipped.set_schedule_relationship(stop_time_update::ScheduleRelationship::Skipped);
         let entity = entity(
             Some("F"),
-            vec![skipped, stop_time_update("201N", event(600, Some(0)), None)],
+            vec![
+                skipped,
+                stop_time_update("201N", event(600, Some(0)), None),
+                last_stop(),
+            ],
         );
 
         let packet = packet_at_test_stop_2(&entity).expect("packet should be built");
