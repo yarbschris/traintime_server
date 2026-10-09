@@ -224,7 +224,7 @@ fn packets_are_built_for_every_platform_of_the_station() {
     let packets = packets_at(&message, &static_data(), GRAND_CENTRAL);
     let arrivals = arrivals_by_route_and_headsign(&packets);
 
-    let expected: [(&str, &str, &[i64]); 15] = [
+    let expected: [(&str, &str, &[i64]); 16] = [
         // 631N / 631S
         ("4", "149 St-Hostos", &[21]),
         (
@@ -249,7 +249,7 @@ fn packets_are_built_for_every_platform_of_the_station() {
             "6",
             "Brooklyn Bridge-City Hall",
             &[
-                0, 6, 9, 12, 16, 20, 24, 26, 29, 32, 36, 41, 46, 49, 54, 56, 60, 64, 69, 72, 82,
+                6, 9, 12, 16, 20, 24, 26, 29, 32, 36, 41, 46, 49, 54, 56, 60, 64, 69, 72, 82,
             ],
         ),
         ("6", "Parkchester", &[1, 13, 20, 28, 35]),
@@ -267,6 +267,11 @@ fn packets_are_built_for_every_platform_of_the_station() {
         ("7X", "Flushing-Main St", &[2, 6, 12, 18, 24, 30, 37]),
         // 901S, shuttles terminating here
         ("GS", GRAND_CENTRAL, &[2, 5, 8, 11, 15, 18, 22, 25, 29, 33]),
+        (
+            "GS",
+            "Times Sq-42 St",
+            &[0, 3, 6, 10, 13, 17, 20, 24, 28, 32],
+        ),
     ];
     let expected: BTreeMap<(String, String), Vec<i64>> = expected
         .into_iter()
@@ -278,7 +283,7 @@ fn packets_are_built_for_every_platform_of_the_station() {
         })
         .collect();
 
-    assert_eq!(packets.len(), 125);
+    assert_eq!(packets.len(), 134);
     assert_eq!(arrivals, expected);
 }
 
@@ -310,22 +315,21 @@ fn no_packet_for_a_train_that_left_over_a_minute_ago() {
 }
 
 #[test]
-fn train_that_left_under_a_minute_ago_is_zero_minutes_away() {
+fn train_that_left_under_a_minute_ago_is_dropped() {
     let message = decode_fixture();
     let static_data = static_data();
     let relevant_stop_ids = static_data.get_relevant_stops_to_station(GRAND_CENTRAL);
 
-    // 6 to Brooklyn Bridge, left 631S 59 seconds before the feed was generated. -59 / 60 rounds
-    // toward zero, so it is not treated as departed.
+    // 6 to Brooklyn Bridge, left 631S 59 seconds before the feed was generated. Departure is
+    // checked in seconds, so it is dropped rather than rounded to 0 minutes away.
     let packet = feed_entity_to_packet(
         entity_by_id(&message, "000372"),
         &static_data,
         &relevant_stop_ids,
         &FEED_TIMESTAMP,
-    )
-    .expect("packet should be built");
+    );
 
-    assert_eq!(packet.mins_until_arrival, 0);
+    assert!(packet.is_none());
 }
 
 #[test]
@@ -362,10 +366,10 @@ fn no_packets_for_an_unknown_station() {
     assert!(packets_at(&message, &static_data(), "Not A Station").is_empty());
 }
 
-// See "Headsign" in the TODO: it is looked up from the last stop of the update, so a trip whose
-// last stop is not in stop_lookup produces no packet at all.
+// A trip whose last stop is not in stop_lookup still builds a packet, with the stop id standing
+// in for the headsign
 #[test]
-fn no_packet_when_the_last_stop_is_not_in_stop_lookup() {
+fn headsign_falls_back_to_the_stop_id_when_the_last_stop_is_not_in_stop_lookup() {
     let message = decode_fixture();
     let static_data = static_data_from(&[
         ("631N", GRAND_CENTRAL),
@@ -377,23 +381,41 @@ fn no_packet_when_the_last_stop_is_not_in_stop_lookup() {
     ]);
 
     let packets = packets_at(&message, &static_data, GRAND_CENTRAL);
+    let (known, unknown): (Vec<&TraintimePacket>, Vec<&TraintimePacket>) = packets
+        .iter()
+        .partition(|packet| packet.trip_headsign.0 == GRAND_CENTRAL);
 
-    // Only the shuttles terminating at Grand Central are left
-    assert_eq!(packets.len(), 10);
-    assert!(packets.iter().all(|packet| packet.route_id.0 == "GS"));
+    // Same packets as with the full stop_lookup, none dropped
+    assert_eq!(packets.len(), 134);
+    // Only the shuttles terminating at Grand Central have a headsign that can be looked up
+    assert_eq!(known.len(), 10);
+    assert!(known.iter().all(|packet| packet.route_id.0 == "GS"));
+    assert_eq!(unknown.len(), 124);
+    assert!(
+        unknown
+            .iter()
+            .all(|packet| packet.trip_headsign.0.starts_with("Unknown, ID: "))
+    );
+    // The ten shuttles leaving for Times Sq
+    assert_eq!(
+        unknown
+            .iter()
+            .filter(|packet| packet.trip_headsign.0 == "Unknown, ID: 902N")
+            .count(),
+        10
+    );
 }
 
-// Known bug, see "A departure-only stop time is dropped" in the TODO. The ten shuttles waiting to
-// leave 901N for Times Sq only carry a departure. Remove the ignore once it is fixed.
+// Make sure we do not drop packets for stations at which a trip is originating
 #[test]
-#[ignore = "known bug: departure-only stop times are dropped"]
 fn packets_are_built_for_trains_originating_at_the_station() {
     let message = decode_fixture();
 
     let packets = packets_at(&message, &static_data(), GRAND_CENTRAL);
     let arrivals = arrivals_by_route_and_headsign(&packets);
 
-    assert_eq!(packets.len(), 135);
+    // 134 after dropping trips that have already departed
+    assert_eq!(packets.len(), 134);
     assert_eq!(
         arrivals.get(&(String::from("GS"), String::from("Times Sq-42 St"))),
         Some(&vec![0, 3, 6, 10, 13, 17, 20, 24, 28, 32])

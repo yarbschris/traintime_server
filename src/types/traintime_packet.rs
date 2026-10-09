@@ -1,5 +1,5 @@
 use crate::types::{gtfs, static_data::StaticData};
-use gtfs_rt_decode::gtfs_rt_types::FeedEntity;
+use gtfs_rt_decode::gtfs_rt_types::{FeedEntity, trip_descriptor, trip_update::stop_time_update};
 
 pub struct TraintimePacket {
     pub route_id: gtfs::RouteID,
@@ -28,10 +28,20 @@ pub fn feed_entity_to_packet(
     now: &u64,
 ) -> Option<TraintimePacket> {
     let trip_update = entity.trip_update.as_ref()?;
+    if matches!(
+        trip_update.trip.schedule_relationship(),
+        trip_descriptor::ScheduleRelationship::Canceled
+            | trip_descriptor::ScheduleRelationship::Deleted
+    ) {
+        return None;
+    }
 
-    let next_update = trip_update.stop_time_update.iter().find(|x| {
-        x.stop_id.is_some()
-            && relevant_stop_ids.contains(&&gtfs::StopID(x.stop_id.clone().unwrap()))
+    let next_update = trip_update.stop_time_update.iter().find(|update| {
+        !matches!(
+            update.schedule_relationship(),
+            stop_time_update::ScheduleRelationship::Skipped
+        ) && update.stop_id.is_some()
+            && relevant_stop_ids.contains(&&gtfs::StopID(update.stop_id.clone().unwrap()))
     })?;
 
     let arrival_time = next_update
@@ -39,26 +49,37 @@ pub fn feed_entity_to_packet(
         .and_then(|a| a.time)
         .or_else(|| next_update.departure.and_then(|d| d.time))?;
 
-    let mins_until = (arrival_time - *now as i64) / 60;
-    if mins_until.is_negative() {
+    let secs_until = arrival_time - *now as i64;
+    if secs_until.is_negative() {
         return None;
     };
+    let mins_until = secs_until / 60;
+
+    let stop_id = trip_update
+        .stop_time_update
+        .iter()
+        .last()?
+        .clone()
+        .stop_id?;
 
     Some(TraintimePacket {
         route_id: gtfs::RouteID(trip_update.trip.route_id.as_ref()?.clone()),
         trip_headsign: static_data
             .stop_lookup
-            .get(
-                &trip_update
-                    .stop_time_update
-                    .iter()
-                    .last()?
-                    .clone()
-                    .stop_id?,
-            )?
+            .get(&stop_id)
+            // if a trip's last top stop_id is not in stop_lookup, simply use unknown
+            // TODO: Can this be more efficient (String alloc + Clone rn)
+            .unwrap_or(&gtfs::StationName(String::from("Unknown, ID: ") + &stop_id))
             .clone(),
         mins_until_arrival: mins_until,
-        delay: next_update.arrival?.delay,
+        delay: next_update
+            .arrival
+            .and_then(|stop_time_event| stop_time_event.delay)
+            .or_else(|| {
+                next_update
+                    .departure
+                    .and_then(|stop_time_event| stop_time_event.delay)
+            }),
     })
 }
 
@@ -176,10 +197,8 @@ mod tests {
         assert_eq!(packet.mins_until_arrival, 2);
     }
 
-    // Known bug, see "A departure-only stop time is dropped" in the TODO. Remove the ignore
-    // once it is fixed.
+    // First stops of a trip typically carry only a departure
     #[test]
-    #[ignore = "known bug: departure-only stop times are dropped"]
     fn departure_time_is_used_when_there_is_no_arrival() {
         let entity = entity(
             Some("F"),
@@ -235,5 +254,75 @@ mod tests {
         );
 
         assert!(packet_at_test_stop_2(&entity).is_none());
+    }
+
+    #[test]
+    fn headsign_falls_back_to_the_stop_id_when_the_last_stop_is_unknown() {
+        let entity = entity(
+            Some("F"),
+            vec![
+                stop_time_update("201N", event(600, Some(0)), None),
+                stop_time_update("999N", event(900, Some(0)), None),
+            ],
+        );
+
+        let packet = packet_at_test_stop_2(&entity).expect("packet should be built");
+
+        assert_eq!(
+            packet.trip_headsign,
+            gtfs::StationName::from("Unknown, ID: 999N")
+        );
+        assert_eq!(packet.mins_until_arrival, 10);
+    }
+
+    #[test]
+    fn no_packet_for_a_canceled_or_deleted_trip() {
+        for relationship in [
+            trip_descriptor::ScheduleRelationship::Canceled,
+            trip_descriptor::ScheduleRelationship::Deleted,
+        ] {
+            let mut entity = entity(
+                Some("F"),
+                vec![stop_time_update("201N", event(600, Some(0)), None)],
+            );
+            entity
+                .trip_update
+                .as_mut()
+                .expect("entity should have a trip update")
+                .trip
+                .set_schedule_relationship(relationship);
+
+            assert!(
+                packet_at_test_stop_2(&entity).is_none(),
+                "{relationship:?} trip should not build a packet"
+            );
+        }
+    }
+
+    #[test]
+    fn no_packet_when_the_relevant_stop_is_skipped() {
+        // A skipped stop may still carry times
+        let mut skipped = stop_time_update("201N", event(600, Some(0)), None);
+        skipped.set_schedule_relationship(stop_time_update::ScheduleRelationship::Skipped);
+        let entity = entity(
+            Some("F"),
+            vec![skipped, stop_time_update("301N", event(900, Some(0)), None)],
+        );
+
+        assert!(packet_at_test_stop_2(&entity).is_none());
+    }
+
+    #[test]
+    fn packet_is_built_when_only_another_stop_is_skipped() {
+        let mut skipped = stop_time_update("101N", event(300, Some(0)), None);
+        skipped.set_schedule_relationship(stop_time_update::ScheduleRelationship::Skipped);
+        let entity = entity(
+            Some("F"),
+            vec![skipped, stop_time_update("201N", event(600, Some(0)), None)],
+        );
+
+        let packet = packet_at_test_stop_2(&entity).expect("packet should be built");
+
+        assert_eq!(packet.mins_until_arrival, 10);
     }
 }
