@@ -43,20 +43,23 @@ pub fn feed_entity_to_packet(
         !matches!(
             update.schedule_relationship(),
             stop_time_update::ScheduleRelationship::Skipped
-        ) && update.stop_id.is_some()
-            && relevant_stop_ids.contains(&&gtfs::StopID(update.stop_id.clone().unwrap()))
+        ) && update.stop_id.as_deref().is_some_and(|stop_id| {
+            relevant_stop_ids
+                .iter()
+                .any(|relevant_stop_id| relevant_stop_id.0 == stop_id)
+        })
     })?;
 
     let last_stop_id = trip_update
         .stop_time_update
         .iter()
         .last()?
-        .clone()
-        .stop_id?; // TODO: Don't want to drop packet if the last stop_id is missing (?)
+        .stop_id
+        .as_ref()?; // TODO: Don't want to drop packet if the last stop_id is missing (?)
 
     // We drop the packet if the station is the end station of the trip, we only want to show when
     // the rider can board (Grand Central <-> Times Sq. 42nd is a good example of this happening)
-    if &last_stop_id == next_update.stop_id.as_ref()? {
+    if last_stop_id == next_update.stop_id.as_ref()? {
         return None;
     }
 
@@ -79,11 +82,11 @@ pub fn feed_entity_to_packet(
         route_id: gtfs::RouteID(trip_update.trip.route_id.as_ref()?.clone()),
         trip_headsign: static_data
             .stop_lookup
-            .get(&last_stop_id)
+            .get(last_stop_id)
             // if a trip's last top stop_id is not in stop_lookup, simply use unknown
             // TODO: Can this be more efficient (String alloc + Clone rn)
             .unwrap_or(&gtfs::StationName(
-                String::from("Unknown, ID: ") + &last_stop_id,
+                String::from("Unknown, ID: ") + last_stop_id,
             ))
             .clone(),
         mins_until_arrival: mins_until,
