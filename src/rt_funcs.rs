@@ -60,20 +60,26 @@ async fn gtfs_rt_handler(
             feed_messages
                 .iter()
                 .flat_map(|message| {
-                    let now = message
-                        .header
-                        .timestamp
-                        .expect("Timestamp missing from feed message, should never happen.");
+                    match message.header.timestamp {
+                        None => {
+                            error!("Missing FeedMessage Timestamp, dropping all entities from this FeedMessage"); 
+                            // TODO: Instead of dropping, maybe try to use system time?
+                            None
+                        }
+                        Some(now) => {
+                            Some(message.entity.iter().filter_map(move |entity| {
+                                traintime_packet::feed_entity_to_packet(
+                                    entity,
+                                    active_static_data,
+                                    relevant_stop_ids,
+                                    &now,
+                                )
+                            }))
+                        }
+                    }
 
-                    message.entity.iter().filter_map(move |entity| {
-                        traintime_packet::feed_entity_to_packet(
-                            entity,
-                            active_static_data,
-                            relevant_stop_ids,
-                            &now,
-                        )
-                    })
                 })
+                .flatten()
                 .collect::<Vec<traintime_packet::TraintimePacket>>()
         };
 
