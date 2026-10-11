@@ -4,7 +4,7 @@ use std::fmt::Display;
 pub struct Stop {
     pub stop_id: StopID,
     pub stop_name: StationName,
-    pub parent_station: String,
+    pub parent_station: StopID,
 }
 
 #[derive(Debug, Clone, serde::Deserialize, Hash, PartialEq, std::cmp::Eq)]
@@ -50,6 +50,12 @@ impl std::borrow::Borrow<String> for StopID {
 pub struct Trip {
     pub route_id: RouteID,
     pub trip_id: TripID,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct Transfer {
+    pub from_stop_id: StopID,
+    pub to_stop_id: StopID,
 }
 
 #[derive(Debug, serde::Deserialize)]
