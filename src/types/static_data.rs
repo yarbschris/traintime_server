@@ -65,7 +65,6 @@ impl StaticData {
         let (mut station_groups, parent_station_group_lookup) =
             group_parents(&parent_stops, &transfers);
 
-        mark_station_groups_with_shared_names(&mut station_groups);
         let child_station_group_lookup =
             build_child_station_group_lookup(child_stops, parent_station_group_lookup);
 
@@ -97,30 +96,20 @@ impl StaticData {
             }
         }
 
-        let route_lookup: HashMap<StationName, Vec<RouteID>> = station_groups
-            .iter()
-            .map(|station_group| {
-                (
-                    station_group.display_name(),
-                    station_group.route_list.clone(),
-                )
-            })
-            .collect();
+        Ok(StaticData::build_from_station_group_and_child_group_map(
+            station_groups,
+            child_station_group_lookup,
+        ))
+    }
 
-        let stop_lookup: HashMap<StopID, StationName> = child_station_group_lookup
-            .into_iter()
-            .map(|(stop_id, group_index)| {
-                let group = station_groups.get(group_index).unwrap();
-                (stop_id, group.display_name())
-            })
-            .collect();
-
-        info!("Building static data...");
-        let static_data = StaticData {
-            stop_lookup,
-            route_lookup,
-        };
-        Ok(static_data)
+    fn build_from_station_group_and_child_group_map(
+        station_groups: Vec<StationGroup>,
+        child_station_group_lookup: HashMap<StopID, usize>,
+    ) -> Self {
+        StaticData {
+            route_lookup: build_route_lookup(&station_groups),
+            stop_lookup: build_stop_lookup(station_groups, child_station_group_lookup),
+        }
     }
 
     pub fn get_relevant_stops_to_station(&self, target_stop_name: &str) -> Vec<&gtfs::StopID> {
@@ -136,6 +125,33 @@ impl Default for StaticData {
     fn default() -> Self {
         Self::new()
     }
+}
+
+// Build mapping of StopID -> Stop Display Name
+fn build_stop_lookup(
+    station_groups: Vec<StationGroup>,
+    child_station_group_lookup: HashMap<StopID, usize>,
+) -> HashMap<StopID, StationName> {
+    child_station_group_lookup
+        .into_iter()
+        .map(|(stop_id, group_index)| {
+            let group = station_groups.get(group_index).unwrap();
+            (stop_id, group.display_name())
+        })
+        .collect()
+}
+
+// Build mapping of StationName -> Vec<RouteId>
+fn build_route_lookup(station_groups: &[StationGroup]) -> HashMap<StationName, Vec<RouteID>> {
+    station_groups
+        .iter()
+        .map(|station_group| {
+            (
+                station_group.display_name(),
+                station_group.route_list.clone(),
+            )
+        })
+        .collect()
 }
 
 // Mark group names as shared if they appear more than once
@@ -220,6 +236,8 @@ fn group_parents<'a>(
             current_map_index += 1;
         }
     }
+
+    mark_station_groups_with_shared_names(&mut station_groups);
 
     (station_groups, parent_station_group_lookup)
 }

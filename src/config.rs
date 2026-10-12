@@ -90,27 +90,36 @@ impl SelectedStationConfig {
         http_client: &reqwest::Client,
     ) -> Vec<String> {
         info!("Updating relevant endpoints");
-        let relevant_routes = {
-            SelectedStationConfig::get_relevant_routes(station_name, rx_active_static_data.clone())
+        match SelectedStationConfig::get_relevant_routes(
+            station_name,
+            rx_active_static_data.clone(),
+        ) {
+            Some(relevant_routes) => {
+                let gtfs_rt_endpoints = {
+                    let system_config = rx_system_config.borrow();
+                    system_config.gtfs_rt_endpoints.clone()
+                };
+
+                let futures = gtfs_rt_endpoints.iter().map(|endpoint| {
+                    determine_if_endpoint_is_relevant(
+                        endpoint.to_owned(),
+                        &relevant_routes,
+                        http_client,
+                    )
+                });
+
+                join_all(futures)
+                    .await
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<String>>()
+            }
+            None => {
+                // TODO do we want to return an empty vec or return an option
+                warn!("No relevant routes found for this station, please check data source");
+                Vec::new()
+            }
         }
-        // TODO: This lookup should never fail unless the static data is really messed up (not
-        // within our control), but should be handled
-        .unwrap();
-
-        let gtfs_rt_endpoints = {
-            let system_config = rx_system_config.borrow();
-            system_config.gtfs_rt_endpoints.clone()
-        };
-
-        let futures = gtfs_rt_endpoints.iter().map(|endpoint| {
-            determine_if_endpoint_is_relevant(endpoint.to_owned(), &relevant_routes, http_client)
-        });
-
-        join_all(futures)
-            .await
-            .into_iter()
-            .flatten()
-            .collect::<Vec<String>>()
     }
 }
 
