@@ -20,11 +20,13 @@ pub struct TraintimeSystemConfig {
 }
 
 impl TraintimeSystemConfig {
-    fn parse_config(config: &str) -> TraintimeSystemConfig {
-        serde_norway::from_str(config).unwrap()
+    fn parse_config(config: &str) -> Result<TraintimeSystemConfig, serde_norway::Error> {
+        serde_norway::from_str(config)
     }
 
-    pub fn read_config_by_system(system: SupportedTransitSystem) -> TraintimeSystemConfig {
+    pub fn read_config_by_system(
+        system: SupportedTransitSystem,
+    ) -> Result<TraintimeSystemConfig, serde_norway::Error> {
         let config = match system {
             SupportedTransitSystem::NycSubway => NYC_SUBWAY_CONFIG,
             SupportedTransitSystem::BostonTransit => BOSTON_TRANSIT_CONFIG,
@@ -226,7 +228,7 @@ mod tests {
             SupportedTransitSystem::NycSubway,
             SupportedTransitSystem::BostonTransit,
         ] {
-            let config = TraintimeSystemConfig::read_config_by_system(system);
+            let config = TraintimeSystemConfig::read_config_by_system(system).unwrap();
 
             assert!(!config.gtfs_static_endpoint.is_empty());
             assert!(!config.gtfs_rt_endpoints.is_empty());

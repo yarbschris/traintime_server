@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
+
 pub mod config;
 pub mod error;
 pub mod rt_funcs;
@@ -6,17 +8,18 @@ pub mod types;
 
 use crate::config::SupportedTransitSystem;
 use crate::types::{gtfs, static_data::StaticData, traintime_packet::TraintimePacket};
+use error::StartError;
 use log::info;
 use tokio::sync::{mpsc, watch};
 
 /// Wires up the static-data and realtime pipelines, and returns the channel
 /// that decoded packets arrive on. Spawns background tasks onto the current
 /// tokio runtime; the caller decides what to do with the packets.
-pub async fn start() -> mpsc::Receiver<Vec<TraintimePacket>> {
+pub async fn start() -> Result<mpsc::Receiver<Vec<TraintimePacket>>, StartError> {
     // Watch channel for transit system configuration. In the future we want to be able to change
     // the target transit system (Unused _tx_system_config)
     let (_tx_system_config, rx_system_config) = watch::channel(
-        config::TraintimeSystemConfig::read_config_by_system(SupportedTransitSystem::NycSubway),
+        config::TraintimeSystemConfig::read_config_by_system(SupportedTransitSystem::NycSubway)?,
     );
 
     // Watch channel for station config
@@ -46,8 +49,7 @@ pub async fn start() -> mpsc::Receiver<Vec<TraintimePacket>> {
     info!("Waiting for station config to be built...");
     rx_station_config
         .wait_for(|station_config| !station_config.relevant_endpoints.is_empty())
-        .await
-        .unwrap();
+        .await?;
 
     let _rt_join_handle = rt_funcs::setup_gtfs_rt(
         rx_station_config,
@@ -55,5 +57,5 @@ pub async fn start() -> mpsc::Receiver<Vec<TraintimePacket>> {
         tx_traintime_packets,
     );
 
-    rx_traintime_packets
+    Ok(rx_traintime_packets)
 }

@@ -4,7 +4,7 @@ use crate::{
     types::gtfs::{RouteID, StationName, Stop, StopID, Transfer, Trip, TripID},
 };
 use itertools::Itertools;
-use log::info;
+use log::{error, info, warn};
 use prost::bytes::Bytes;
 use std::collections::HashMap;
 
@@ -81,6 +81,7 @@ impl StaticData {
         let mut raw_record = csv::StringRecord::new();
         let headers = rdr.headers()?.clone();
 
+        info!("Adding routes to station_groups");
         while rdr.read_record(&mut raw_record)? {
             let record: gtfs::StopTime = raw_record.deserialize(Some(&headers))?;
             let stop_id = &record.stop_id;
@@ -132,17 +133,22 @@ fn build_stop_lookup(
     station_groups: Vec<StationGroup>,
     child_station_group_lookup: HashMap<StopID, usize>,
 ) -> HashMap<StopID, StationName> {
+    info!("Building Stop Lookup...");
     child_station_group_lookup
         .into_iter()
-        .map(|(stop_id, group_index)| {
-            let group = station_groups.get(group_index).unwrap();
-            (stop_id, group.display_name())
+        .filter_map(|(stop_id, group_index)| {
+            let Some(station_group) = station_groups.get(group_index) else {
+                error!("Stop {:?} has an invalid index ({}) into station group vector, this means there is an internal bug", stop_id, group_index);
+                return None;
+            };
+            Some((stop_id, station_group.display_name()))
         })
         .collect()
 }
 
 // Build mapping of StationName -> Vec<RouteId>
 fn build_route_lookup(station_groups: &[StationGroup]) -> HashMap<StationName, Vec<RouteID>> {
+    info!("Building Route Lookup...");
     station_groups
         .iter()
         .map(|station_group| {
@@ -183,13 +189,19 @@ fn build_child_station_group_lookup(
     child_stops: Vec<Stop>,
     parent_station_group_lookup: HashMap<&StopID, usize>,
 ) -> HashMap<StopID, usize> {
+    info!("Building Child Station Group Lookup");
     child_stops
         .into_iter()
-        .map(|child_stop| {
-            let group_position = parent_station_group_lookup
-                .get(&child_stop.parent_station)
-                .expect("Unassigned child stop");
-            (child_stop.stop_id, group_position.to_owned())
+        .filter_map(|child_stop| {
+            let Some(group_position) = parent_station_group_lookup.get(&child_stop.parent_station)
+            else {
+                warn!(
+                    "Skipping stop {:?}: parent {:?}_is not a known station",
+                    child_stop.stop_id, child_stop.parent_station
+                );
+                return None;
+            };
+            Some((child_stop.stop_id, group_position.to_owned()))
         })
         .collect()
 }
@@ -207,6 +219,7 @@ fn group_parents<'a>(
     parent_stops: &'a Vec<Stop>,
     transfers: &[Transfer],
 ) -> (Vec<StationGroup>, HashMap<&'a StopID, usize>) {
+    info!("Building Station Groups");
     let mut station_groups: Vec<StationGroup> = Vec::new();
     let mut parent_station_group_lookup: HashMap<&StopID, usize> = HashMap::new();
 
