@@ -8,6 +8,32 @@ use log::info;
 use prost::bytes::Bytes;
 use std::collections::HashMap;
 
+pub struct StationGroup {
+    pub station_name: StationName,
+    pub route_list: Vec<RouteID>,
+    pub name_is_shared_flag: bool,
+}
+
+impl StationGroup {
+    pub fn new(station_name: StationName) -> Self {
+        StationGroup {
+            station_name,
+            route_list: Vec::new(),
+            name_is_shared_flag: false,
+        }
+    }
+
+    pub fn display_name(&self) -> StationName {
+        if !self.name_is_shared_flag {
+            return self.station_name.clone();
+        } else {
+            let routes = self.route_list.iter().sorted().join(", ");
+            let new_name = format!("{} ({})", self.station_name, routes);
+            return StationName(new_name);
+        }
+    }
+}
+
 pub struct StaticData {
     pub stop_lookup: HashMap<gtfs::StopID, gtfs::StationName>, // stop_id -> stop_name
     pub route_lookup: HashMap<gtfs::StationName, Vec<gtfs::RouteID>>, // station_name -> route_id
@@ -29,15 +55,19 @@ impl StaticData {
         let stops: Vec<Stop> = rdr.deserialize().collect::<Result<_, _>>()?;
         drop(rdr);
 
+        let (parent_stops, child_stops) = split_stops_into_parents_and_children(stops);
+
         info!("Deserializing Transfer Data...");
         let mut rdr = csv::Reader::from_reader(zip_reader.by_name("transfers.txt")?);
         let transfers: Vec<Transfer> = rdr.deserialize().collect::<Result<_, _>>()?;
         drop(rdr);
 
-        let ambiguous_parent_stop_ids = get_ambiguous_parent_stop_ids(&stops, &transfers);
-        let parent_stop_id_lookup = build_parent_lookup(&stops);
+        let (mut station_groups, parent_station_group_lookup) =
+            group_parents(&parent_stops, &transfers);
 
-        let stop_lookup = build_stop_lookup(stops);
+        mark_station_groups_with_shared_names(&mut station_groups);
+        let child_station_group_lookup =
+            build_child_station_group_lookup(child_stops, parent_station_group_lookup);
 
         info!("Deserializing Trip Data...");
         let mut rdr = csv::Reader::from_reader(zip_reader.by_name("trips.txt")?);
@@ -52,23 +82,38 @@ impl StaticData {
         let mut raw_record = csv::StringRecord::new();
         let headers = rdr.headers()?.clone();
 
-        let mut route_lookup: HashMap<StationName, Vec<RouteID>> = HashMap::new();
-
         while rdr.read_record(&mut raw_record)? {
             let record: gtfs::StopTime = raw_record.deserialize(Some(&headers))?;
-            if let Some(station_name) = stop_lookup.get(&record.stop_id)
-                && let Some(route_id) = trip_lookup.get(&record.trip_id)
+            let stop_id = &record.stop_id;
+            if let Some(route_id) = trip_lookup.get(&record.trip_id)
+                && let Some(station_group_index) = child_station_group_lookup.get(stop_id)
+                && let Some(station_group) = station_groups.get_mut(*station_group_index)
+                && !station_group
+                    .route_list
+                    .iter()
+                    .any(|exisiting_route_id| exisiting_route_id == route_id)
             {
-                route_lookup
-                    .entry(station_name.clone())
-                    .and_modify(|routes| {
-                        if !routes.contains(route_id) {
-                            routes.push(route_id.clone())
-                        }
-                    })
-                    .or_insert(vec![route_id.clone()]);
+                station_group.route_list.push(route_id.clone());
             }
         }
+
+        let route_lookup: HashMap<StationName, Vec<RouteID>> = station_groups
+            .iter()
+            .map(|station_group| {
+                (
+                    station_group.display_name(),
+                    station_group.route_list.clone(),
+                )
+            })
+            .collect();
+
+        let stop_lookup: HashMap<StopID, StationName> = child_station_group_lookup
+            .into_iter()
+            .map(|(stop_id, group_index)| {
+                let group = station_groups.get(group_index).unwrap();
+                (stop_id, group.display_name())
+            })
+            .collect();
 
         info!("Building static data...");
         let static_data = StaticData {
@@ -93,26 +138,43 @@ impl Default for StaticData {
     }
 }
 
-fn get_ambiguous_parent_stop_ids<'a>(
-    stops: &'a [Stop],
-    transfers: &[Transfer],
-) -> Vec<&'a gtfs::StopID> {
-    info!("Getting ambiguous parent stop ids...");
-    // Get an iterator over all parent stops (where parent_station is empty)
-    let parent_stops = stops
-        .iter()
-        .filter(|stop| stop.parent_station.0.is_empty())
-        .collect_vec();
+// Mark group names as shared if they appear more than once
+fn mark_station_groups_with_shared_names(station_groups: &mut [StationGroup]) {
+    let station_name_counter = build_station_name_counter(station_groups);
+    station_groups.iter_mut().for_each(|station_group| {
+        if let Some(count) = station_name_counter.get(&station_group.station_name)
+            && *count > 1
+        {
+            station_group.name_is_shared_flag = true;
+        }
+    })
+}
 
-    // Filter out stops that are not ambiguous
-    parent_stops
-        .iter()
-        .filter(|stop_1| {
-            parent_stops
-                .iter()
-                .any(|stop_2| stops_are_ambiguous(stop_1, stop_2, transfers))
+// Build a mapping of station_name -> num appearences in vector of StationGroup
+fn build_station_name_counter(station_groups: &[StationGroup]) -> HashMap<StationName, usize> {
+    let mut station_name_counter: HashMap<StationName, usize> = HashMap::new();
+
+    station_groups.iter().for_each(|station_group| {
+        station_name_counter
+            .entry(station_group.station_name.clone())
+            .and_modify(|count| *count += 1)
+            .or_insert(1);
+    });
+    station_name_counter
+}
+// Build a lookup from child_stop_id -> index into a StationGroup vector
+fn build_child_station_group_lookup(
+    child_stops: Vec<Stop>,
+    parent_station_group_lookup: HashMap<&StopID, usize>,
+) -> HashMap<StopID, usize> {
+    child_stops
+        .into_iter()
+        .map(|child_stop| {
+            let group_position = parent_station_group_lookup
+                .get(&child_stop.parent_station)
+                .expect("Unassigned child stop");
+            (child_stop.stop_id, group_position.to_owned())
         })
-        .map(|stop| &stop.stop_id)
         .collect()
 }
 
@@ -122,43 +184,96 @@ fn get_ambiguous_parent_stop_ids<'a>(
 // the '4', '5', '6','6X' routes. Using "transfers.txt", we identify stops which
 // share a name, but are not listed in "transfers.txt" as possible transfers. Those 'ambiguous'
 // stations new stop name will be displayed as "{StationName} ({route serviced})+"
-fn stops_are_ambiguous(stop_1: &Stop, stop_2: &Stop, transfers: &[Transfer]) -> bool {
-    !stops_are_equivalent(stop_1, stop_2)
-        && stops_have_same_name(stop_1, stop_2)
-        && !transfer_exists_between_stops(stop_1, stop_2, transfers)
+//
+// To this end, we separate the stations into StationGroups if they could be considered part of the
+// same complex (they share a stop name, and a transfer is listed in transfers.txt)
+fn group_parents<'a>(
+    parent_stops: &'a Vec<Stop>,
+    transfers: &[Transfer],
+) -> (Vec<StationGroup>, HashMap<&'a StopID, usize>) {
+    let mut station_groups: Vec<StationGroup> = Vec::new();
+    let mut parent_station_group_lookup: HashMap<&StopID, usize> = HashMap::new();
+
+    // Keep track of the current_index into the station_groups vector
+    let mut current_map_index: usize = 0;
+
+    for stop in parent_stops {
+        // Skip if lookup already has an entry for this station
+        if parent_station_group_lookup.contains_key(&stop.stop_id) {
+            continue;
+        }
+
+        // Get stop ids that belong to the same group
+        let stops_ids_in_same_group =
+            find_stop_ids_that_belong_to_group(stop, parent_stops, transfers);
+
+        // Create new station group
+        let new_station_group = StationGroup::new(stop.stop_name.clone());
+
+        {
+            // Add the station group to the station group vector and add mappings from all group
+            // stop_ids -> current_map_index. Increment current_map_index
+            station_groups.push(new_station_group);
+            stops_ids_in_same_group.into_iter().for_each(|stop_id| {
+                parent_station_group_lookup.insert(stop_id, current_map_index);
+            });
+            current_map_index += 1;
+        }
+    }
+
+    (station_groups, parent_station_group_lookup)
 }
 
-fn stops_are_equivalent(stop_1: &Stop, stop_2: &Stop) -> bool {
-    stop_1.stop_id == stop_2.stop_id
+// Given one parent stop and all parent stops, return a vector of all stop_ids that belong to the
+// same StationGroup as 'target_parent_stop'
+fn find_stop_ids_that_belong_to_group<'a>(
+    target_parent_stop: &Stop,
+    parent_stops: &'a [Stop],
+    transfers: &[Transfer],
+) -> Vec<&'a StopID> {
+    parent_stops
+        .iter()
+        .filter(|other_stop| {
+            stops_belong_to_same_station_group(target_parent_stop, other_stop, transfers)
+        })
+        .map(|stop| &stop.stop_id)
+        .collect()
 }
+
+// Given a vector of stops, separate into a tuple of (Parents, Children)
+fn split_stops_into_parents_and_children(stops: Vec<Stop>) -> (Vec<Stop>, Vec<Stop>) {
+    stops.into_iter().fold(
+        (Vec::new(), Vec::new()),
+        |(mut parents, mut children), stop| {
+            if stop.parent_station.0.is_empty() {
+                parents.push(stop)
+            } else {
+                children.push(stop)
+            }
+            (parents, children)
+        },
+    )
+}
+
+fn stops_belong_to_same_station_group(
+    stop_1: &Stop,
+    stop_2: &Stop,
+    transfers: &[Transfer],
+) -> bool {
+    // A stop always belongs to its own group, even if transfers.txt has no self-transfer for it
+    stop_1.stop_id == stop_2.stop_id
+        || (stops_have_same_name(stop_1, stop_2)
+            && transfer_exists_between_stops(stop_1, stop_2, transfers))
+}
+
 fn stops_have_same_name(stop_1: &Stop, stop_2: &Stop) -> bool {
     stop_1.stop_name.0 == stop_2.stop_name.0
 }
+
 fn transfer_exists_between_stops(stop_1: &Stop, stop_2: &Stop, transfers: &[Transfer]) -> bool {
     transfers.iter().any(|transfer| {
         transfer.from_stop_id == stop_1.stop_id && transfer.to_stop_id == stop_2.stop_id
     })
-}
-
-// Build HashMap to Lookup Station Name using Stop ID as key
-fn build_stop_lookup(stops: Vec<Stop>) -> HashMap<StopID, StationName> {
-    info!("Building stop lookup");
-    stops
-        .into_iter()
-        .filter(|stop| !stop.parent_station.0.is_empty())
-        .map(|stop| (stop.stop_id, stop.stop_name))
-        .collect()
-}
-
-// TODO: Combine with above funciton (build_stop_lookup)?
-// Build HashMap to lookup parent stop_id using child stop_id as key
-fn build_parent_lookup(stops: &[Stop]) -> HashMap<&StopID, &StopID> {
-    info!("Building parent lookup");
-    stops
-        .iter()
-        .filter(|stop| !stop.parent_station.0.is_empty())
-        .map(|stop| (&stop.stop_id, &stop.parent_station))
-        .collect()
 }
 
 // Build HashMap to Lookup RouteID from TripID

@@ -25,7 +25,7 @@ impl Display for StationName {
     }
 }
 
-#[derive(Debug, Clone, serde::Deserialize, Hash, PartialEq, std::cmp::Eq)]
+#[derive(Debug, Clone, serde::Deserialize, Hash, PartialEq, std::cmp::Eq, PartialOrd, Ord)]
 pub struct RouteID(pub String);
 
 impl Display for RouteID {

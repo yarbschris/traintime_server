@@ -30,7 +30,8 @@ pub async fn start() -> mpsc::Receiver<Vec<TraintimePacket>> {
     let (tx_traintime_packets, rx_traintime_packets) = mpsc::channel(2);
 
     // TODO: We want to dynamically change station name, rn we just set it manually
-    tx_station_config.send_modify(|x| x.station_name = gtfs::StationName::from("East Broadway"));
+    tx_station_config
+        .send_modify(|x| x.station_name = gtfs::StationName::from("86 St (4, 5, 6, 6X)"));
 
     let _static_join_handle =
         static_funcs::setup_gtfs_static(tx_active_static_data, rx_system_config.clone());

@@ -9,3 +9,7 @@ stop_id,stop_name,stop_lat,stop_lon,location_type,parent_station
 301N,Test Stop 3,0,0,,301
 401,Test Stop 3,0,0,1,
 401N,Test Stop 3,0,0,,401
+501,Test Stop 4,0,0,1,
+501N,Test Stop 4,0,0,,501
+601,Test Stop 4,0,0,1,
+601N,Test Stop 4,0,0,,601
