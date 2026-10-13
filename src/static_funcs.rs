@@ -57,9 +57,9 @@ async fn refresh_static_data(
         return Ok(());
     }
 
-    info!("Building retained static data strucutre");
+    info!("Building retained static data structure...");
     let static_data = static_data::StaticData::build_from_bytes(response.bytes().await?)?;
-    info!("Sending retained static data");
+    info!("Sending retained static data structure...");
     if let Err(e) = tx_active_static_data.send(static_data) {
         return Err(GtfsStaticError::Send(e));
     }

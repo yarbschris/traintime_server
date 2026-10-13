@@ -12,7 +12,7 @@ impl std::fmt::Display for TraintimePacket {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Line: {} to {}\nMinutes Until Arrival: {},\nDelay: {}\n",
+            "Line: {} to {}\nMinutes: {}\nDelay: {}\n",
             self.route_id,
             self.trip_headsign,
             self.mins_until_arrival,
