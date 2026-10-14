@@ -1,4 +1,5 @@
 use crate::{
+    error::ConfigError,
     rt_funcs,
     types::{
         gtfs::{self, StationName},
@@ -25,16 +26,23 @@ impl TraintimeSystemConfig {
         serde_norway::from_str(config)
     }
 
+    fn validate_config(self) -> Result<TraintimeSystemConfig, ConfigError> {
+        if self.gtfs_rt_endpoints.is_empty() {
+            return Err(ConfigError::NoRealtimeEndpoints);
+        }
+        Ok(self)
+    }
+
     pub fn read_config_by_system(
         system: SupportedTransitSystem,
-    ) -> Result<TraintimeSystemConfig, serde_norway::Error> {
+    ) -> Result<TraintimeSystemConfig, ConfigError> {
         let config = match system {
             SupportedTransitSystem::NycSubway => NYC_SUBWAY_CONFIG,
             SupportedTransitSystem::BostonTransit => BOSTON_TRANSIT_CONFIG,
             SupportedTransitSystem::MtaMetroNorth => MTA_METRO_NORTH_CONFIG,
         };
 
-        TraintimeSystemConfig::parse_config(config)
+        TraintimeSystemConfig::parse_config(config)?.validate_config()
     }
 }
 
@@ -95,10 +103,9 @@ impl SelectedStationConfig {
     ) -> Vec<String> {
         info!("Updating relevant endpoints");
         let gtfs_rt_endpoints = { rx_system_config.borrow().gtfs_rt_endpoints.clone() };
-        let num_rt_endpoints = rx_system_config.borrow().gtfs_rt_endpoints.len();
-        if num_rt_endpoints < 1 {
-            panic!("error: transit config contains no gtfs-rt endpoints");
-        }
+        let num_rt_endpoints = gtfs_rt_endpoints.len();
+        // No endpoints is caught at config loading, so we do not need to check here
+
         if num_rt_endpoints == 1 {
             return gtfs_rt_endpoints;
         }

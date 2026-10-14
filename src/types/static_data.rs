@@ -25,11 +25,11 @@ impl StationGroup {
 
     pub fn display_name(&self) -> StationName {
         if !self.name_is_shared_flag {
-            return self.station_name.clone();
+            self.station_name.clone()
         } else {
             let routes = self.route_list.iter().sorted().join(", ");
             let new_name = format!("{} ({})", self.station_name, routes);
-            return StationName(new_name);
+            StationName(new_name)
         }
     }
 }

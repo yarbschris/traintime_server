@@ -3,7 +3,7 @@ use tokio::sync::watch;
 
 #[derive(Debug)]
 pub enum StartError {
-    Config(serde_norway::Error),
+    Config(ConfigError),
     StationConfigClosed(watch::error::RecvError),
 }
 
@@ -18,8 +18,8 @@ impl std::fmt::Display for StartError {
 
 impl std::error::Error for StartError {}
 
-impl From<serde_norway::Error> for StartError {
-    fn from(e: serde_norway::Error) -> Self {
+impl From<ConfigError> for StartError {
+    fn from(e: ConfigError) -> Self {
         Self::Config(e)
     }
 }
@@ -27,6 +27,29 @@ impl From<serde_norway::Error> for StartError {
 impl From<watch::error::RecvError> for StartError {
     fn from(e: watch::error::RecvError) -> Self {
         Self::StationConfigClosed(e)
+    }
+}
+
+#[derive(Debug)]
+pub enum ConfigError {
+    Parse(serde_norway::Error),
+    NoRealtimeEndpoints,
+}
+
+impl std::fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Parse(e) => write!(f, "{e}"),
+            Self::NoRealtimeEndpoints => write!(f, "no gtfs_rt_endpoints provided"),
+        }
+    }
+}
+
+impl std::error::Error for ConfigError {}
+
+impl From<serde_norway::Error> for ConfigError {
+    fn from(e: serde_norway::Error) -> Self {
+        Self::Parse(e)
     }
 }
 
