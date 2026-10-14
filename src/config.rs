@@ -33,16 +33,20 @@ impl TraintimeSystemConfig {
         Ok(self)
     }
 
+    fn from_yaml(s: &str) -> Result<Self, ConfigError> {
+        Self::parse_config(s)?.validate_config()
+    }
+
     pub fn read_config_by_system(
         system: SupportedTransitSystem,
     ) -> Result<TraintimeSystemConfig, ConfigError> {
-        let config = match system {
+        let config_yaml = match system {
             SupportedTransitSystem::NycSubway => NYC_SUBWAY_CONFIG,
             SupportedTransitSystem::BostonTransit => BOSTON_TRANSIT_CONFIG,
             SupportedTransitSystem::MtaMetroNorth => MTA_METRO_NORTH_CONFIG,
         };
 
-        TraintimeSystemConfig::parse_config(config)?.validate_config()
+        TraintimeSystemConfig::from_yaml(config_yaml)
     }
 }
 
@@ -248,5 +252,35 @@ mod tests {
             assert!(!config.gtfs_static_endpoint.is_empty());
             assert!(!config.gtfs_rt_endpoints.is_empty());
         }
+    }
+
+    #[test]
+    fn config_with_one_realtime_endpoint_is_accepted() {
+        let yaml = "gtfs_static_endpoint: https://example.com/static.zip\n\
+                    gtfs_rt_endpoints:\n  - https://example.com/rt\n";
+
+        let config = TraintimeSystemConfig::from_yaml(yaml).unwrap();
+
+        assert_eq!(config.gtfs_rt_endpoints, vec!["https://example.com/rt"]);
+    }
+
+    #[test]
+    fn config_without_realtime_endpoints_is_rejected() {
+        let yaml = "gtfs_static_endpoint: https://example.com/static.zip\n\
+                    gtfs_rt_endpoints: []\n";
+
+        let result = TraintimeSystemConfig::from_yaml(yaml);
+
+        assert!(matches!(result, Err(ConfigError::NoRealtimeEndpoints)));
+    }
+
+    #[test]
+    fn config_missing_the_realtime_endpoints_key_is_a_parse_error() {
+        // A missing key is malformed YAML for this struct, not an empty list
+        let yaml = "gtfs_static_endpoint: https://example.com/static.zip\n";
+
+        let result = TraintimeSystemConfig::from_yaml(yaml);
+
+        assert!(matches!(result, Err(ConfigError::Parse(_))));
     }
 }
