@@ -37,7 +37,7 @@ impl Display for RouteID {
 #[derive(Debug, serde::Deserialize, Hash, PartialEq, std::cmp::Eq)]
 pub struct TripID(pub String);
 
-#[derive(Debug, serde::Deserialize, Hash, PartialEq, std::cmp::Eq)]
+#[derive(Debug, serde::Deserialize, Hash, PartialEq, std::cmp::Eq, Clone)]
 pub struct StopID(pub String);
 
 impl std::borrow::Borrow<String> for StopID {

@@ -18,9 +18,10 @@ use tokio::sync::{mpsc, watch};
 pub async fn start() -> Result<mpsc::Receiver<Vec<TraintimePacket>>, StartError> {
     // Watch channel for transit system configuration. In the future we want to be able to change
     // the target transit system (Unused _tx_system_config)
-    let (_tx_system_config, rx_system_config) = watch::channel(
-        config::TraintimeSystemConfig::read_config_by_system(SupportedTransitSystem::NycSubway)?,
-    );
+    let (_tx_system_config, rx_system_config) =
+        watch::channel(config::TraintimeSystemConfig::read_config_by_system(
+            SupportedTransitSystem::MtaMetroNorth,
+        )?);
 
     // Watch channel for station config
     let (tx_station_config, mut rx_station_config) =
@@ -33,8 +34,7 @@ pub async fn start() -> Result<mpsc::Receiver<Vec<TraintimePacket>>, StartError>
     let (tx_traintime_packets, rx_traintime_packets) = mpsc::channel(2);
 
     // TODO: We want to dynamically change station name, rn we just set it manually
-    tx_station_config
-        .send_modify(|x| x.station_name = gtfs::StationName::from("86 St (4, 5, 6, 6X)"));
+    tx_station_config.send_modify(|x| x.station_name = gtfs::StationName::from("Katonah"));
 
     let _static_join_handle =
         static_funcs::setup_gtfs_static(tx_active_static_data, rx_system_config.clone());

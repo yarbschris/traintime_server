@@ -65,8 +65,22 @@ impl StaticData {
         let (mut station_groups, parent_station_group_lookup) =
             group_parents(&parent_stops, &transfers);
 
-        let child_station_group_lookup =
-            build_child_station_group_lookup(child_stops, parent_station_group_lookup);
+        let mut child_station_group_lookup =
+            build_child_station_group_lookup(child_stops, &parent_station_group_lookup);
+
+        // TODO: this is not the best solution to parent stops w/ no children, fix later :)
+        // so lazy
+        let parent_stations_with_no_children: HashMap<StopID, usize> = parent_station_group_lookup
+            .into_iter()
+            .filter(|(_, parent_index)| {
+                !child_station_group_lookup
+                    .values()
+                    .any(|child_index| child_index == parent_index)
+            })
+            .map(|(parent_stop_id, parent_index)| (parent_stop_id.clone(), parent_index))
+            .collect();
+
+        child_station_group_lookup.extend(parent_stations_with_no_children);
 
         info!("Deserializing Trip Data...");
         let mut rdr = csv::Reader::from_reader(zip_reader.by_name("trips.txt")?);
@@ -187,7 +201,7 @@ fn build_station_name_counter(station_groups: &[StationGroup]) -> HashMap<Statio
 // Build a lookup from child_stop_id -> index into a StationGroup vector
 fn build_child_station_group_lookup(
     child_stops: Vec<Stop>,
-    parent_station_group_lookup: HashMap<&StopID, usize>,
+    parent_station_group_lookup: &HashMap<&StopID, usize>,
 ) -> HashMap<StopID, usize> {
     info!("Building Child Station Group Lookup");
     child_stops
@@ -220,6 +234,21 @@ fn group_parents<'a>(
     transfers: &[Transfer],
 ) -> (Vec<StationGroup>, HashMap<&'a StopID, usize>) {
     info!("Building Station Groups");
+    // Transfers.txt is optional, so if it does not exist we just build one StationGroup per parent
+    // station
+    if transfers.is_empty() {
+        return parent_stops
+            .iter()
+            .enumerate()
+            .map(|(index, parent_stop)| {
+                (
+                    StationGroup::new(parent_stop.stop_name.clone()),
+                    (&parent_stop.stop_id, index),
+                )
+            })
+            .collect();
+    }
+
     let mut station_groups: Vec<StationGroup> = Vec::new();
     let mut parent_station_group_lookup: HashMap<&StopID, usize> = HashMap::new();
 

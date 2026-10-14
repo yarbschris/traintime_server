@@ -12,6 +12,7 @@ use tokio::sync::watch;
 
 const NYC_SUBWAY_CONFIG: &str = include_str!("../system_configs/nyc_subway.yml");
 const BOSTON_TRANSIT_CONFIG: &str = include_str!("../system_configs/boston_transit.yml");
+const MTA_METRO_NORTH_CONFIG: &str = include_str!("../system_configs/mta_metro_north.yml");
 
 #[derive(Debug, serde::Deserialize)]
 pub struct TraintimeSystemConfig {
@@ -30,6 +31,7 @@ impl TraintimeSystemConfig {
         let config = match system {
             SupportedTransitSystem::NycSubway => NYC_SUBWAY_CONFIG,
             SupportedTransitSystem::BostonTransit => BOSTON_TRANSIT_CONFIG,
+            SupportedTransitSystem::MtaMetroNorth => MTA_METRO_NORTH_CONFIG,
         };
 
         TraintimeSystemConfig::parse_config(config)
@@ -92,16 +94,19 @@ impl SelectedStationConfig {
         http_client: &reqwest::Client,
     ) -> Vec<String> {
         info!("Updating relevant endpoints");
+        let gtfs_rt_endpoints = { rx_system_config.borrow().gtfs_rt_endpoints.clone() };
+        let num_rt_endpoints = rx_system_config.borrow().gtfs_rt_endpoints.len();
+        if num_rt_endpoints < 1 {
+            panic!("error: transit config contains no gtfs-rt endpoints");
+        }
+        if num_rt_endpoints == 1 {
+            return gtfs_rt_endpoints;
+        }
         match SelectedStationConfig::get_relevant_routes(
             station_name,
             rx_active_static_data.clone(),
         ) {
             Some(relevant_routes) => {
-                let gtfs_rt_endpoints = {
-                    let system_config = rx_system_config.borrow();
-                    system_config.gtfs_rt_endpoints.clone()
-                };
-
                 let futures = gtfs_rt_endpoints.iter().map(|endpoint| {
                     determine_if_endpoint_is_relevant(
                         endpoint.to_owned(),
@@ -117,9 +122,10 @@ impl SelectedStationConfig {
                     .collect::<Vec<String>>()
             }
             None => {
-                // TODO do we want to return an empty vec or return an option
-                warn!("No relevant routes found for this station, please check data source");
-                Vec::new()
+                warn!(
+                    "No relevant routes found for this station, please check data source. Using all provided endpoints."
+                );
+                gtfs_rt_endpoints
             }
         }
     }
@@ -167,6 +173,7 @@ pub fn endpoint_matches(entities: &[FeedEntity], relevant_routes: &[gtfs::RouteI
 pub enum SupportedTransitSystem {
     NycSubway,
     BostonTransit,
+    MtaMetroNorth,
 }
 
 #[cfg(test)]
@@ -227,6 +234,7 @@ mod tests {
         for system in [
             SupportedTransitSystem::NycSubway,
             SupportedTransitSystem::BostonTransit,
+            SupportedTransitSystem::MtaMetroNorth,
         ] {
             let config = TraintimeSystemConfig::read_config_by_system(system).unwrap();
 
