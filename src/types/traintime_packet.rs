@@ -24,7 +24,7 @@ impl std::fmt::Display for TraintimePacket {
 pub fn feed_entity_to_packet(
     entity: &FeedEntity,
     static_data: &StaticData,
-    relevant_stop_ids: &[&gtfs::StopID],
+    relevant_stop_ids: &[gtfs::StopID],
     now: &u64,
 ) -> Option<TraintimePacket> {
     let trip_update = entity.trip_update.as_ref()?;
@@ -169,7 +169,7 @@ mod tests {
     // Packet for a rider waiting at Test Stop 2
     fn packet_at_test_stop_2(entity: &FeedEntity) -> Option<TraintimePacket> {
         let relevant_stop_id = gtfs::StopID(String::from("201N"));
-        feed_entity_to_packet(entity, &static_data(), &[&relevant_stop_id], &NOW)
+        feed_entity_to_packet(entity, &static_data(), &[relevant_stop_id], &NOW)
     }
 
     #[test]

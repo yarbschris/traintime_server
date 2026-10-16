@@ -1,4 +1,4 @@
-use crate::types::static_data::StaticData;
+use crate::types::{gtfs::StationName, static_data::StaticData};
 use tokio::sync::watch;
 
 #[derive(Debug)]
@@ -50,6 +50,21 @@ impl std::error::Error for ConfigError {}
 impl From<serde_norway::Error> for ConfigError {
     fn from(e: serde_norway::Error) -> Self {
         Self::Parse(e)
+    }
+}
+
+#[derive(Debug)]
+pub enum ResolveError {
+    UnknownStation(StationName),
+}
+
+impl std::fmt::Display for ResolveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnknownStation(station_name) => {
+                write!(f, "cannot resolve station name {}", station_name)
+            }
+        }
     }
 }
 

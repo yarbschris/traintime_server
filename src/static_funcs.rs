@@ -4,13 +4,13 @@ use reqwest::{Response, header::HeaderValue};
 use std::time::Duration;
 use tokio::sync::watch;
 
-use crate::config::TraintimeSystemConfig;
+use crate::config::TransitSystemConfig;
 use crate::error::GtfsStaticError;
 use crate::types::static_data::StaticData;
 
 pub fn setup_gtfs_static(
     tx_active_static_data: watch::Sender<StaticData>,
-    rx_system_config: watch::Receiver<TraintimeSystemConfig>,
+    rx_system_config: watch::Receiver<TransitSystemConfig>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(fetch_static_handler(
         tx_active_static_data,
@@ -20,7 +20,7 @@ pub fn setup_gtfs_static(
 
 async fn fetch_static_handler(
     tx_active_static_data: watch::Sender<StaticData>,
-    rx_system_config: watch::Receiver<TraintimeSystemConfig>,
+    rx_system_config: watch::Receiver<TransitSystemConfig>,
 ) {
     let mut gtfs_static_fetch_interval = tokio::time::interval(Duration::from_hours(1));
     // To compare with fetched data etag to avoid uneccessary updates
@@ -46,7 +46,7 @@ async fn fetch_static_handler(
 // Fetch -> Check if update is needed -> Build retained structure -> Send -> Update etag
 async fn refresh_static_data(
     http_client: &reqwest::Client,
-    rx_system_config: &watch::Receiver<TraintimeSystemConfig>,
+    rx_system_config: &watch::Receiver<TransitSystemConfig>,
     tx_active_static_data: &watch::Sender<StaticData>,
     last_etag: &mut Option<HeaderValue>,
 ) -> Result<(), GtfsStaticError> {
@@ -80,7 +80,7 @@ pub fn should_skip_update(last: &Option<HeaderValue>, new: &Option<HeaderValue>)
 
 // Make a request to the endpoint which provides gtfs static data
 async fn fetch_gtfs_static_data(
-    rx_system_config: watch::Receiver<TraintimeSystemConfig>,
+    rx_system_config: watch::Receiver<TransitSystemConfig>,
     http_client: &reqwest::Client,
 ) -> Result<Response, reqwest::Error> {
     info!("Fetching GTFS Static Data...");

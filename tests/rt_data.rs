@@ -1,8 +1,8 @@
 use gtfs_rt_decode::gtfs_rt_types::{FeedEntity, FeedMessage};
 use prost::bytes::Bytes;
-use server::config::endpoint_matches;
+use server::config::{SupportedTransitSystem, TransitSystemConfig, get_stop_ids_by_station_name};
 use server::rt_funcs::decode_gtfs_rt;
-use server::types::gtfs::{RouteID, StationName, StopID};
+use server::types::gtfs::{StationName, StopID};
 use server::types::static_data::StaticData;
 use server::types::traintime_packet::{TraintimePacket, feed_entity_to_packet};
 use std::collections::{BTreeMap, BTreeSet};
@@ -58,13 +58,19 @@ fn static_data_from(stops: &[(&str, &str)]) -> StaticData {
     static_data
 }
 
-// Same steps as gtfs_rt_handler: relevant stops from the station name, "now" from the header
+// Stop ids for a station, looked up the same way resolve_station does
+fn stop_ids_at(static_data: &StaticData, station_name: &str) -> Vec<StopID> {
+    get_stop_ids_by_station_name(&StationName::from(station_name), static_data)
+        .expect("station should be in stop_lookup")
+}
+
+// Same steps as gtfs_rt_handler: relevant stops for the station, "now" from the header
 fn packets_at(
     message: &FeedMessage,
     static_data: &StaticData,
     station_name: &str,
 ) -> Vec<TraintimePacket> {
-    let relevant_stop_ids = static_data.get_relevant_stops_to_station(station_name);
+    let relevant_stop_ids = stop_ids_at(static_data, station_name);
     let now = message
         .header
         .timestamp
@@ -100,13 +106,6 @@ fn entity_by_id<'a>(message: &'a FeedMessage, id: &str) -> &'a FeedEntity {
         .iter()
         .find(|entity| entity.id == id)
         .expect("entity should be in the fixture")
-}
-
-fn routes(route_ids: &[&str]) -> Vec<RouteID> {
-    route_ids
-        .iter()
-        .map(|route_id| RouteID(String::from(*route_id)))
-        .collect()
 }
 
 #[test]
@@ -198,23 +197,33 @@ fn decode_rejects_bytes_that_are_not_a_feed() {
     assert!(result.is_err());
 }
 
+// The bundled NYC config's route list for the 1-7/S endpoint must match what a recording of that
+// endpoint actually carries, so a wrong or missing route in the YAML fails here
 #[test]
-fn endpoint_matches_routes_in_the_fixture() {
+fn nyc_config_lists_the_routes_the_fixture_carries() {
     let message = decode_fixture();
+    let config = TransitSystemConfig::read_config_by_system(&SupportedTransitSystem::NycSubway)
+        .expect("bundled NYC config should load");
+    let endpoint = config
+        .gtfs_rt_endpoints
+        .iter()
+        .find(|endpoint| endpoint.url.ends_with("nyct%2Fgtfs"))
+        .expect("NYC config should list the 1-7/S endpoint");
 
-    assert!(endpoint_matches(&message.entity, &routes(&["A", "6"])));
-    assert!(endpoint_matches(&message.entity, &routes(&["GS"])));
-}
+    let configured: BTreeSet<&str> = endpoint
+        .routes
+        .as_ref()
+        .expect("NYC endpoints should list their routes")
+        .iter()
+        .map(|route| route.0.as_str())
+        .collect();
+    let recorded: BTreeSet<&str> = message
+        .entity
+        .iter()
+        .filter_map(|entity| entity.trip_update.as_ref()?.trip.route_id.as_deref())
+        .collect();
 
-#[test]
-fn endpoint_does_not_match_routes_missing_from_the_fixture() {
-    let message = decode_fixture();
-
-    // S is the shuttle's name, but not its route id
-    assert!(!endpoint_matches(
-        &message.entity,
-        &routes(&["A", "C", "S"])
-    ));
+    assert_eq!(configured, recorded);
 }
 
 #[test]
@@ -300,7 +309,7 @@ fn packets_have_no_delay_when_the_feed_does_not_report_one() {
 fn no_packet_for_a_train_that_left_over_a_minute_ago() {
     let message = decode_fixture();
     let static_data = static_data();
-    let relevant_stop_ids = static_data.get_relevant_stops_to_station(GRAND_CENTRAL);
+    let relevant_stop_ids = stop_ids_at(&static_data, GRAND_CENTRAL);
 
     // 4 to Bedford Park Blvd, left 631N 73 seconds before the feed was generated
     let packet = feed_entity_to_packet(
@@ -317,7 +326,7 @@ fn no_packet_for_a_train_that_left_over_a_minute_ago() {
 fn train_that_left_under_a_minute_ago_is_dropped() {
     let message = decode_fixture();
     let static_data = static_data();
-    let relevant_stop_ids = static_data.get_relevant_stops_to_station(GRAND_CENTRAL);
+    let relevant_stop_ids = stop_ids_at(&static_data, GRAND_CENTRAL);
 
     // 6 to Brooklyn Bridge, left 631S 59 seconds before the feed was generated. Departure is
     // checked in seconds, so it is dropped rather than rounded to 0 minutes away.
@@ -335,7 +344,7 @@ fn train_that_left_under_a_minute_ago_is_dropped() {
 fn no_packets_from_vehicle_or_alert_entities() {
     let message = decode_fixture();
     let static_data = static_data();
-    let relevant_stop_ids = static_data.get_relevant_stops_to_station(GRAND_CENTRAL);
+    let relevant_stop_ids = stop_ids_at(&static_data, GRAND_CENTRAL);
 
     // Vehicle positions carry a stop_id too (often a relevant one), but no trip update
     let packets = message
@@ -356,13 +365,6 @@ fn no_packets_for_a_station_the_feed_does_not_serve() {
     let static_data = static_data_from(&[("F15N", "Delancey St-Essex St")]);
 
     assert!(packets_at(&message, &static_data, "Delancey St-Essex St").is_empty());
-}
-
-#[test]
-fn no_packets_for_an_unknown_station() {
-    let message = decode_fixture();
-
-    assert!(packets_at(&message, &static_data(), "Not A Station").is_empty());
 }
 
 // A trip whose last stop is not in stop_lookup still builds a packet, with the stop id standing
@@ -405,7 +407,7 @@ fn headsign_falls_back_to_the_stop_id_when_the_last_stop_is_not_in_stop_lookup()
 fn no_packets_for_trains_terminating_at_the_station() {
     let message = decode_fixture();
     let static_data = static_data();
-    let relevant_stop_ids = static_data.get_relevant_stops_to_station(GRAND_CENTRAL);
+    let relevant_stop_ids = stop_ids_at(&static_data, GRAND_CENTRAL);
 
     // Trip updates whose last stop is 901S, the shuttle platform trains from Times Sq end at
     let terminating: Vec<&FeedEntity> = message

@@ -1,3 +1,3 @@
 gtfs_static_endpoint: https://rrgtfsfeeds.s3.amazonaws.com/gtfsmnr.zip
 gtfs_rt_endpoints:
-  - https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/mnr%2Fgtfs-mnr
+  - url: https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/mnr%2Fgtfs-mnr

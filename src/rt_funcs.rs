@@ -8,22 +8,23 @@ use tokio::time;
 
 use crate::config;
 use crate::error::GtfsRtError;
+use crate::types::traintime_packet::TraintimePacket;
 use crate::types::{static_data::StaticData, traintime_packet};
 
 pub fn setup_gtfs_rt(
-    rx_station_config: watch::Receiver<config::SelectedStationConfig>,
+    rx_resolved_station: watch::Receiver<Option<config::ResolvedStation>>,
     rx_active_static_data: watch::Receiver<StaticData>,
     tx_traintime_packets: mpsc::Sender<Vec<traintime_packet::TraintimePacket>>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(gtfs_rt_handler(
-        rx_station_config,
+        rx_resolved_station,
         rx_active_static_data,
         tx_traintime_packets,
     ))
 }
 
 async fn gtfs_rt_handler(
-    rx_station_config: watch::Receiver<config::SelectedStationConfig>,
+    mut rx_resolved_station: watch::Receiver<Option<config::ResolvedStation>>,
     rx_active_static_data: watch::Receiver<StaticData>,
     tx_traintime_packets: mpsc::Sender<Vec<traintime_packet::TraintimePacket>>,
 ) {
@@ -33,29 +34,31 @@ async fn gtfs_rt_handler(
     let http_client = reqwest::Client::new();
 
     loop {
-        gtfs_rt_fetch_interval.tick().await;
-
-        let (target_station_name, relevant_endpoints) = {
-            let station_config = rx_station_config.borrow();
-            (
-                station_config.station_name.clone(),
-                station_config.relevant_endpoints.clone(),
-            )
-        };
-        if relevant_endpoints.is_empty() {
-            warn!(
-                "No relevant endpoints found. Retrying in {} seconds...",
-                fetch_interval_seconds
-            );
-            continue;
+        tokio::select! {
+            _ = gtfs_rt_fetch_interval.tick() => {},
+            r = rx_resolved_station.changed() => if r.is_err() {
+                // TODO: Add an rt error variant, this will always be an internal error tho
+                error!("bug: resolved station channel closed");
+                break;
+            },
         }
+
+        let (relevant_stop_ids, relevant_endpoints) = {
+            let Some(rx) = rx_resolved_station.borrow().clone() else {
+                warn!(
+                    "No resolved station, retrying on regular {}s interval or station selection change",
+                    fetch_interval_seconds
+                );
+                continue;
+            };
+            (rx.stop_ids, rx.relevant_endpoints)
+        };
+        // Because we have to move into filter_map closure later
+        let relevant_stop_ids = &relevant_stop_ids;
 
         let feed_messages = gtfs_rt_request_handler(relevant_endpoints, &http_client).await;
         let packets = {
             let active_static_data = &rx_active_static_data.borrow();
-
-            let relevant_stop_ids =
-                &active_static_data.get_relevant_stops_to_station(target_station_name.0.as_str());
 
             feed_messages
                 .iter()
@@ -83,14 +86,21 @@ async fn gtfs_rt_handler(
                 .collect::<Vec<traintime_packet::TraintimePacket>>()
         };
 
-        tx_traintime_packets.send(packets).await.inspect_err(|e| {
+        send_packets(packets, &tx_traintime_packets, fetch_interval_seconds).await;
+    }
+}
+
+async fn send_packets(
+    packets: Vec<TraintimePacket>,
+    tx_traintime_packets: &mpsc::Sender<Vec<traintime_packet::TraintimePacket>>,
+    fetch_interval_seconds: u64,
+) {
+    tx_traintime_packets.send(packets).await.inspect_err(|e| {
             error!(
                 "error sending traintime packets, retrying packet refresh in {fetch_interval_seconds} seconds: {e}"
             )
         }).ok();
-    }
 }
-
 // For each endpoint, make a request. Put feed messages together, and return
 async fn gtfs_rt_request_handler(
     endpoints: Vec<String>,

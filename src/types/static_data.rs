@@ -126,14 +126,6 @@ impl StaticData {
             stop_lookup: build_stop_lookup(station_groups, child_station_group_lookup),
         }
     }
-
-    pub fn get_relevant_stops_to_station(&self, target_stop_name: &str) -> Vec<&gtfs::StopID> {
-        self.stop_lookup
-            .iter()
-            .filter(|(_, stop_name)| stop_name.0.as_str() == target_stop_name)
-            .map(|(stop_id, _)| stop_id)
-            .collect::<Vec<&gtfs::StopID>>()
-    }
 }
 
 impl Default for StaticData {

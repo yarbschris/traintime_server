@@ -9,7 +9,8 @@ pub mod rt_funcs;
 pub mod static_funcs;
 pub mod types;
 
-use crate::config::SupportedTransitSystem;
+use crate::config::{SelectedStation, SupportedTransitSystem};
+use crate::types::gtfs::StationName;
 use crate::types::{gtfs, static_data::StaticData, traintime_packet::TraintimePacket};
 use error::StartError;
 use log::info;
@@ -18,47 +19,40 @@ use tokio::sync::{mpsc, watch};
 /// Wires up the static-data and realtime pipelines, and returns the channel
 /// that decoded packets arrive on. Spawns background tasks onto the current
 /// tokio runtime; the caller decides what to do with the packets.
-pub async fn start() -> Result<mpsc::Receiver<Vec<TraintimePacket>>, StartError> {
-    // Watch channel for transit system configuration. In the future we want to be able to change
-    // the target transit system (Unused _tx_system_config)
-    let (_tx_system_config, rx_system_config) =
-        watch::channel(config::TraintimeSystemConfig::read_config_by_system(
-            SupportedTransitSystem::MtaMetroNorth,
-        )?);
-
-    // Watch channel for station config
-    let (tx_station_config, mut rx_station_config) =
-        watch::channel(config::SelectedStationConfig::new());
-
+pub async fn start(
+    station_name: StationName,
+    system: SupportedTransitSystem,
+) -> Result<
+    (
+        mpsc::Receiver<Vec<TraintimePacket>>,
+        watch::Sender<SelectedStation>,
+    ),
+    StartError,
+> {
+    info!("Starting Server");
     // Watch channel for static data
-    let (tx_active_static_data, rx_active_static_data) = watch::channel(StaticData::new());
+    let (tx_static_data, rx_static_data) = watch::channel(StaticData::new());
+
+    let (
+        _tx_system,
+        rx_system,
+        tx_selected_station,
+        rx_resolved_station,
+        _resolve_task_join_handle,
+    ) = config::setup_config(system.clone(), rx_static_data.clone())?;
 
     // MPSC for Traintime Packets
     let (tx_traintime_packets, rx_traintime_packets) = mpsc::channel(2);
 
-    // TODO: We want to dynamically change station name, rn we just set it manually
-    tx_station_config.send_modify(|x| x.station_name = gtfs::StationName::from("Katonah"));
+    let _static_join_handle = static_funcs::setup_gtfs_static(tx_static_data, rx_system.clone());
 
-    let _static_join_handle =
-        static_funcs::setup_gtfs_static(tx_active_static_data, rx_system_config.clone());
+    let _rt_join_handle =
+        rt_funcs::setup_gtfs_rt(rx_resolved_station, rx_static_data, tx_traintime_packets);
 
-    let _config_join_handle = tokio::spawn(config::update_endpoints_on_static_data_update(
-        rx_system_config,
-        rx_active_static_data.clone(),
-        tx_station_config.clone(),
-    ));
+    tx_selected_station.send_modify(|selected_station| {
+        selected_station.station_name = station_name;
+        selected_station.transit_system = system;
+    });
 
-    // We need a relevant endpoints before we can fetch targeted data, so we wait until we have relevant endpoints
-    info!("Waiting for station config to be built...");
-    rx_station_config
-        .wait_for(|station_config| !station_config.relevant_endpoints.is_empty())
-        .await?;
-
-    let _rt_join_handle = rt_funcs::setup_gtfs_rt(
-        rx_station_config,
-        rx_active_static_data,
-        tx_traintime_packets,
-    );
-
-    Ok(rx_traintime_packets)
+    Ok((rx_traintime_packets, tx_selected_station))
 }

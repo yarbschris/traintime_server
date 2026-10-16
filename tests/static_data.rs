@@ -1,6 +1,7 @@
 use prost::bytes::Bytes;
 use reqwest::header::HeaderValue;
-use server::error::GtfsStaticError;
+use server::config::get_stop_ids_by_station_name;
+use server::error::{GtfsStaticError, ResolveError};
 use server::static_funcs::should_skip_update;
 use server::types::gtfs::{StationName, StopID};
 use server::types::static_data::StaticData;
@@ -26,11 +27,15 @@ fn sorted_routes(static_data: &StaticData, station_name: &str) -> Vec<String> {
     routes
 }
 
+fn stop_ids(static_data: &StaticData, station_name: &str) -> Result<Vec<StopID>, ResolveError> {
+    get_stop_ids_by_station_name(&StationName::from(station_name), static_data)
+}
+
 fn sorted_stops(static_data: &StaticData, station_name: &str) -> Vec<String> {
-    let mut stops: Vec<String> = static_data
-        .get_relevant_stops_to_station(station_name)
+    let mut stops: Vec<String> = stop_ids(static_data, station_name)
+        .expect("station should be in stop_lookup")
         .into_iter()
-        .map(|stop| stop.0.clone())
+        .map(|stop| stop.0)
         .collect();
     stops.sort();
     stops
@@ -131,14 +136,21 @@ fn relevant_stops_are_every_platform_with_the_station_name() {
     // Parents 301 and 401 share a name but not a transfer, so each gets its own label
     assert_eq!(sorted_stops(&static_data, "Test Stop 3 (4)"), ["301N"]);
     assert_eq!(sorted_stops(&static_data, "Test Stop 3 (5)"), ["401N"]);
-    assert!(sorted_stops(&static_data, "Test Stop 3").is_empty());
+    // The unqualified name belongs to neither
+    assert!(matches!(
+        stop_ids(&static_data, "Test Stop 3"),
+        Err(ResolveError::UnknownStation(_))
+    ));
 }
 
 #[test]
-fn relevant_stops_is_empty_for_unknown_station() {
+fn relevant_stops_are_an_error_for_unknown_station() {
     let static_data = build_fixture();
 
-    assert!(sorted_stops(&static_data, "Not A Station").is_empty());
+    assert!(matches!(
+        stop_ids(&static_data, "Not A Station"),
+        Err(ResolveError::UnknownStation(_))
+    ));
 }
 
 #[test]
