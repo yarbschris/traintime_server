@@ -72,6 +72,13 @@ impl TransitSystemConfig {
         if self.gtfs_rt_endpoints.is_empty() {
             return Err(ConfigError::NoRealtimeEndpoints);
         }
+        if self.gtfs_rt_endpoints.len() > 1 {
+            for endpoint in &self.gtfs_rt_endpoints {
+                if endpoint.routes.is_none() {
+                    return Err(ConfigError::NoRoutesList(endpoint.url.clone()));
+                }
+            }
+        }
         Ok(self)
     }
 
@@ -348,6 +355,7 @@ mod tests {
 
     #[test]
     fn config_with_one_realtime_endpoint_is_accepted() {
+        // A single endpoint may leave out routes, since it carries everything
         let yaml = "gtfs_static_endpoint: https://example.com/static.zip\n\
                     gtfs_rt_endpoints:\n  - url: https://example.com/rt\n";
 
@@ -356,6 +364,36 @@ mod tests {
         assert_eq!(config.gtfs_rt_endpoints.len(), 1);
         assert_eq!(config.gtfs_rt_endpoints[0].url, "https://example.com/rt");
         assert!(config.gtfs_rt_endpoints[0].routes.is_none());
+    }
+
+    #[test]
+    fn config_with_several_endpoints_rejects_one_without_routes() {
+        // The second endpoint is the one missing routes, so a check that only looked at the first
+        // would pass this config
+        let yaml = "gtfs_static_endpoint: https://example.com/static.zip\n\
+                    gtfs_rt_endpoints:\n  \
+                    - url: https://example.com/ace\n    routes: [\"A\", \"C\", \"E\"]\n  \
+                    - url: https://example.com/bdfm\n";
+
+        let result = TransitSystemConfig::from_yaml(yaml);
+
+        assert!(matches!(
+            result,
+            Err(ConfigError::NoRoutesList(url)) if url == "https://example.com/bdfm"
+        ));
+    }
+
+    #[test]
+    fn config_with_several_endpoints_all_with_routes_is_accepted() {
+        let config = two_feed_system();
+
+        assert_eq!(config.gtfs_rt_endpoints.len(), 2);
+        assert!(
+            config
+                .gtfs_rt_endpoints
+                .iter()
+                .all(|endpoint| endpoint.routes.is_some())
+        );
     }
 
     #[test]

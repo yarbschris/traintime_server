@@ -34,6 +34,7 @@ impl From<watch::error::RecvError> for StartError {
 pub enum ConfigError {
     Parse(serde_norway::Error),
     NoRealtimeEndpoints,
+    NoRoutesList(String),
 }
 
 impl std::fmt::Display for ConfigError {
@@ -41,6 +42,10 @@ impl std::fmt::Display for ConfigError {
         match self {
             Self::Parse(e) => write!(f, "{e}"),
             Self::NoRealtimeEndpoints => write!(f, "no gtfs_rt_endpoints provided"),
+            Self::NoRoutesList(url) => write!(
+                f,
+                "no routes list found for {url}. field is required when multiple endpoints are provided"
+            ),
         }
     }
 }
