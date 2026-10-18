@@ -1,4 +1,7 @@
-use crate::types::{gtfs::StationName, static_data::StaticData};
+use crate::types::{
+    gtfs::{RouteID, StationName},
+    static_data::StaticData,
+};
 use tokio::sync::watch;
 
 #[derive(Debug)]
@@ -61,6 +64,7 @@ impl From<serde_norway::Error> for ConfigError {
 #[derive(Debug)]
 pub enum ResolveError {
     UnknownStation(StationName),
+    EndpointsDoNotCoverAnyRoutes(Vec<RouteID>),
 }
 
 impl std::fmt::Display for ResolveError {
@@ -68,6 +72,12 @@ impl std::fmt::Display for ResolveError {
         match self {
             Self::UnknownStation(station_name) => {
                 write!(f, "cannot resolve station name {}", station_name)
+            }
+            Self::EndpointsDoNotCoverAnyRoutes(routes) => {
+                write!(
+                    f,
+                    "no detected station routes found in system yaml config. detected routes: {routes:?}"
+                )
             }
         }
     }

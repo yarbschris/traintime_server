@@ -165,6 +165,10 @@ fn resolve_station(
         .map(|endpoint| endpoint.url.clone())
         .collect();
 
+    if relevant_endpoints.is_empty() {
+        return Err(ResolveError::EndpointsDoNotCoverAnyRoutes(routes));
+    }
+
     Ok(ResolvedStation {
         routes,
         stop_ids,
