@@ -1,7 +1,4 @@
-use crate::types::{
-    gtfs::{RouteID, StationName},
-    static_data::StaticData,
-};
+use crate::types::gtfs::{RouteID, StationName};
 use tokio::sync::watch;
 
 #[derive(Debug)]
@@ -134,7 +131,6 @@ pub enum GtfsStaticError {
     Zip(zip::result::ZipError),
     Csv(csv::Error),
     Fetch(reqwest::Error),
-    Send(watch::error::SendError<StaticData>),
 }
 
 impl std::fmt::Display for GtfsStaticError {
@@ -146,7 +142,6 @@ impl std::fmt::Display for GtfsStaticError {
                 "error interacting with gtfs-static csv representation: {e}"
             ),
             Self::Fetch(e) => write!(f, "error fetching gtfs-static: {e}"),
-            Self::Send(e) => write!(f, "error sending gtfs-static: {e}"),
         }
     }
 }
@@ -167,11 +162,5 @@ impl From<csv::Error> for GtfsStaticError {
 impl From<reqwest::Error> for GtfsStaticError {
     fn from(e: reqwest::Error) -> Self {
         Self::Fetch(e)
-    }
-}
-
-impl From<watch::error::SendError<StaticData>> for GtfsStaticError {
-    fn from(e: watch::error::SendError<StaticData>) -> Self {
-        Self::Send(e)
     }
 }

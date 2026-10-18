@@ -48,7 +48,7 @@ fn static_data() -> StaticData {
 }
 
 fn static_data_from(stops: &[(&str, &str)]) -> StaticData {
-    let mut static_data = StaticData::new();
+    let mut static_data = StaticData::empty(SupportedTransitSystem::NycSubway);
     for (stop_id, station_name) in stops {
         static_data.stop_lookup.insert(
             StopID(String::from(*stop_id)),

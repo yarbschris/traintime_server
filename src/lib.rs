@@ -10,7 +10,7 @@ pub mod static_funcs;
 pub mod types;
 
 use crate::config::SelectedStation;
-use crate::types::{gtfs, static_data::StaticData, traintime_packet::TraintimePacket};
+use crate::types::{gtfs, traintime_packet::TraintimePacket};
 use error::StartError;
 use log::info;
 use tokio::sync::{mpsc, watch};
@@ -28,8 +28,8 @@ pub async fn start(
     StartError,
 > {
     info!("Starting Server");
-    // Watch channel for static data
-    let (tx_static_data, rx_static_data) = watch::channel(StaticData::new());
+
+    let (tx_static_data, rx_static_data) = watch::channel(None);
 
     let (
         tx_selected_station,

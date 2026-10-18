@@ -1,6 +1,6 @@
 use prost::bytes::Bytes;
 use reqwest::header::HeaderValue;
-use server::config::get_stop_ids_by_station_name;
+use server::config::{SupportedTransitSystem, get_stop_ids_by_station_name};
 use server::error::{GtfsStaticError, StationResolveError};
 use server::static_funcs::should_skip_update;
 use server::types::gtfs::{StationName, StopID};
@@ -11,8 +11,11 @@ use server::types::static_data::StaticData;
 const GTFS_STATIC_ZIP: &[u8] = include_bytes!("../test_data/gtfs_static.zip");
 
 fn build_fixture() -> StaticData {
-    StaticData::build_from_bytes(Bytes::from_static(GTFS_STATIC_ZIP))
-        .expect("fixture zip should build")
+    StaticData::build_from_bytes(
+        Bytes::from_static(GTFS_STATIC_ZIP),
+        SupportedTransitSystem::NycSubway,
+    )
+    .expect("fixture zip should build")
 }
 
 fn sorted_routes(static_data: &StaticData, station_name: &str) -> Vec<String> {
@@ -158,7 +161,10 @@ fn relevant_stops_are_an_error_for_unknown_station() {
 
 #[test]
 fn build_from_bytes_rejects_bytes_that_are_not_a_zip() {
-    let result = StaticData::build_from_bytes(Bytes::from_static(b"not a zip"));
+    let result = StaticData::build_from_bytes(
+        Bytes::from_static(b"not a zip"),
+        SupportedTransitSystem::NycSubway,
+    );
 
     assert!(matches!(result, Err(GtfsStaticError::Zip(_))));
 }

@@ -1,6 +1,6 @@
 use futures::future::join_all;
 use gtfs_rt_decode::gtfs_rt_types::FeedMessage;
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use prost::bytes::Bytes;
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
@@ -13,19 +13,19 @@ use crate::types::{static_data::StaticData, traintime_packet};
 
 pub fn setup_gtfs_rt(
     rx_resolved_station: watch::Receiver<Option<config::ResolvedStation>>,
-    rx_active_static_data: watch::Receiver<StaticData>,
+    rx_static_data: watch::Receiver<Option<StaticData>>,
     tx_traintime_packets: mpsc::Sender<Vec<traintime_packet::TraintimePacket>>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(gtfs_rt_handler(
         rx_resolved_station,
-        rx_active_static_data,
+        rx_static_data,
         tx_traintime_packets,
     ))
 }
 
 async fn gtfs_rt_handler(
     mut rx_resolved_station: watch::Receiver<Option<config::ResolvedStation>>,
-    rx_active_static_data: watch::Receiver<StaticData>,
+    rx_static_data: watch::Receiver<Option<StaticData>>,
     tx_traintime_packets: mpsc::Sender<Vec<traintime_packet::TraintimePacket>>,
 ) {
     let fetch_interval_seconds = 30;
@@ -43,9 +43,14 @@ async fn gtfs_rt_handler(
             },
         }
 
+        if rx_static_data.borrow().is_none() {
+            debug!("No static data loaded, skipping realtime fetch");
+            continue;
+        }
+
         let (relevant_stop_ids, relevant_endpoints) = {
             let Some(rx) = rx_resolved_station.borrow().clone() else {
-                warn!(
+                debug!(
                     "No resolved station, retrying on regular {}s interval or station selection change",
                     fetch_interval_seconds
                 );
@@ -58,8 +63,11 @@ async fn gtfs_rt_handler(
 
         let feed_messages = gtfs_rt_request_handler(relevant_endpoints, &http_client).await;
         let packets = {
-            let active_static_data = &rx_active_static_data.borrow();
-
+            let static_data_ref = rx_static_data.borrow();
+            let Some(static_data) = static_data_ref.as_ref() else {
+                debug!("Static Data cleared during realtime fetch, skipping tick");
+                continue;
+            };
             feed_messages
                 .iter()
                 .flat_map(|message| {
@@ -73,7 +81,7 @@ async fn gtfs_rt_handler(
                             Some(message.entity.iter().filter_map(move |entity| {
                                 traintime_packet::feed_entity_to_packet(
                                     entity,
-                                    active_static_data,
+                                    static_data,
                                     relevant_stop_ids,
                                     &now,
                                 )

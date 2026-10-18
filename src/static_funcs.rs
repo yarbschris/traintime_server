@@ -1,5 +1,5 @@
 use crate::types::static_data;
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use reqwest::{Response, header::HeaderValue};
 use std::collections::HashSet;
 use std::time::Duration;
@@ -10,17 +10,17 @@ use crate::error::GtfsStaticError;
 use crate::types::{gtfs::RouteID, static_data::StaticData};
 
 pub fn setup_gtfs_static(
-    tx_active_static_data: watch::Sender<StaticData>,
+    tx_static_data: watch::Sender<Option<StaticData>>,
     rx_resolved_system_config: watch::Receiver<Option<ResolvedSystemConfig>>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(fetch_static_handler(
-        tx_active_static_data,
+        tx_static_data,
         rx_resolved_system_config,
     ))
 }
 
 async fn fetch_static_handler(
-    tx_active_static_data: watch::Sender<StaticData>,
+    tx_static_data: watch::Sender<Option<StaticData>>,
     mut rx_resolved_system_config: watch::Receiver<Option<ResolvedSystemConfig>>,
 ) {
     let mut gtfs_static_fetch_interval = tokio::time::interval(Duration::from_hours(1));
@@ -44,7 +44,7 @@ async fn fetch_static_handler(
         if let Err(e) = refresh_static_data(
             &http_client,
             &rx_resolved_system_config,
-            &tx_active_static_data,
+            &tx_static_data,
             &mut last_etag,
         )
         .await
@@ -58,7 +58,7 @@ async fn fetch_static_handler(
 async fn refresh_static_data(
     http_client: &reqwest::Client,
     rx_resolved_system_config: &watch::Receiver<Option<ResolvedSystemConfig>>,
-    tx_static_data: &watch::Sender<StaticData>,
+    tx_static_data: &watch::Sender<Option<StaticData>>,
     last_etag: &mut Option<HeaderValue>,
 ) -> Result<(), GtfsStaticError> {
     // We clone the system config out of the watch channel to avoid holding the watch lock over .await calls
@@ -74,21 +74,32 @@ async fn refresh_static_data(
         }
 
         info!("Building retained static data structure...");
-        let static_data = static_data::StaticData::build_from_bytes(response.bytes().await?)?;
+        let static_data = static_data::StaticData::build_from_bytes(
+            response.bytes().await?,
+            resolved_system_config.supported_system.clone(),
+        )?;
 
-        let system = rx_resolved_system_config.borrow();
+        // System could have been changed during the build. Make sure that we built for the correct
+        // system, send None if we did not
+        let is_current = rx_resolved_system_config
+            .borrow()
+            .as_ref()
+            .is_some_and(|c| c.supported_system == static_data.built_from_system);
+        if !is_current {
+            warn!("System changed during static data build, cannot send new static data");
+            tx_static_data.send_replace(None);
+            return Ok(());
+        }
+
         warn_unaccounted_for_routes(&static_data, &resolved_system_config);
-        drop(system);
 
         info!("Sending retained static data structure...");
-        if let Err(e) = tx_static_data.send(static_data) {
-            return Err(GtfsStaticError::Send(e));
-        }
+        tx_static_data.send_replace(Some(static_data));
         *last_etag = new_etag;
         Ok(())
     } else {
-        warn!("No resolved system, cannot update static data");
-        // TODO: Make StaticData channel an Option<StaticData>
+        debug!("No system config loaded, clearing static data");
+        tx_static_data.send_replace(None);
         Ok(())
     }
 }

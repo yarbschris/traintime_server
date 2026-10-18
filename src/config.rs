@@ -5,7 +5,7 @@ use crate::{
         static_data::StaticData,
     },
 };
-use log::warn;
+use log::{debug, warn};
 use serde::Deserialize;
 use tokio::{sync::watch, task::JoinHandle};
 
@@ -16,7 +16,7 @@ const MTA_METRO_NORTH_CONFIG: &str = include_str!("../system_configs/mta_metro_n
 // Create watch channels for configurations, spawn resolve station task
 pub fn setup_config(
     fallback_selection: SelectedStation,
-    rx_static_data: watch::Receiver<StaticData>,
+    rx_static_data: watch::Receiver<Option<StaticData>>,
 ) -> Result<
     (
         watch::Sender<SelectedStation>,
@@ -137,17 +137,18 @@ pub struct ResolvedStation {
 // Spawned Task: Watch for change in selected_station, resolve system and station.
 async fn resolve_station_on_selection_change(
     mut rx_selected_station: watch::Receiver<SelectedStation>,
-    mut rx_static_data: watch::Receiver<StaticData>,
+    mut rx_static_data: watch::Receiver<Option<StaticData>>,
     tx_resolved_system_config: watch::Sender<Option<ResolvedSystemConfig>>,
     tx_resolved_station: watch::Sender<Option<ResolvedStation>>,
 ) {
-    // TODO: On startup right now, we set an initial value, we want to resolve immediately so that
+    // On startup right now, we set an initial value, we want to resolve immediately so that
     // static refresh task and resolve task do not hang waiting for each other
     rx_selected_station.mark_changed();
+
     loop {
         tokio::select! {
             r = rx_selected_station.changed() => if r.is_err() { break },
-            r = rx_static_data.changed() => if r.is_err() {break},
+            r = rx_static_data.changed() => if r.is_err() { break },
         }
 
         let selected_station = rx_selected_station.borrow_and_update();
@@ -156,7 +157,6 @@ async fn resolve_station_on_selection_change(
             match resolve_system(&selected_station) {
                 Ok(resolved_system_config) => {
                     tx_resolved_system_config.send_replace(Some(resolved_system_config));
-                    // Need to force static data refresh
                 }
                 Err(e) => {
                     warn!("{e}");
@@ -165,24 +165,48 @@ async fn resolve_station_on_selection_change(
             }
         }
 
-        if let Some(resolved_system_config) = tx_resolved_system_config.borrow().as_ref() {
-            let static_data = rx_static_data.borrow();
-            match resolve_station(&selected_station, &static_data, resolved_system_config) {
-                Ok(new_resolved_station) => {
-                    tx_resolved_station.send_modify(|resolved_station| {
-                        *resolved_station = Some(new_resolved_station)
-                    });
-                }
-                Err(e) => {
-                    warn!("{e}");
-                    tx_resolved_station.send_modify(|resolved_station| *resolved_station = None);
-                }
+        let resolved = try_resolve_station(
+            &rx_static_data,
+            &tx_resolved_system_config,
+            &selected_station,
+        );
+        tx_resolved_station.send_if_modified(|current| {
+            if current.is_none() && resolved.is_none() {
+                false
+            } else {
+                *current = resolved;
+                true
             }
-        } else {
-            warn!(
-                "Cannot resolve station: no system config detected, will retry on next static data update or selection"
-            );
-            continue;
+        });
+    }
+}
+
+// Validate the necessary conditions for resolving station, return None otherwise
+fn try_resolve_station(
+    rx_static_data: &watch::Receiver<Option<StaticData>>,
+    tx_resolved_system_config: &watch::Sender<Option<ResolvedSystemConfig>>,
+    selected_station: &SelectedStation,
+) -> Option<ResolvedStation> {
+    let static_data_ref = rx_static_data.borrow();
+    let Some(static_data) = static_data_ref.as_ref() else {
+        debug!("Cannot resolve station: no static data loaded");
+        return None;
+    };
+    let resolved_system_config_ref = tx_resolved_system_config.borrow();
+    let Some(resolved_system_config) = resolved_system_config_ref.as_ref() else {
+        debug!("Cannot resolve station: no system config loaded");
+        return None;
+    };
+    if static_data.built_from_system != resolved_system_config.supported_system {
+        debug!("Cannot resolve station: static data is for a different system");
+        return None;
+    }
+
+    match resolve_station(selected_station, static_data, resolved_system_config) {
+        Ok(new_resolved_station) => Some(new_resolved_station),
+        Err(e) => {
+            warn!("{e}");
+            None
         }
     }
 }
@@ -190,14 +214,14 @@ async fn resolve_station_on_selection_change(
 // We must update the resolved system config during refresh if the resolved system config watch
 // channel currently holds None or the resolved system config's system is different from user selection
 fn resolve_needs_system_config_refresh(
-    sel: &SelectedStation,
+    selected_station: &SelectedStation,
     tx_resolved_system_config: &watch::Sender<Option<ResolvedSystemConfig>>,
 ) -> bool {
     tx_resolved_system_config
         .borrow()
         .as_ref()
         .is_none_or(|resolved_system_config| {
-            resolved_system_config.supported_system != sel.transit_system
+            resolved_system_config.supported_system != selected_station.transit_system
         })
 }
 
@@ -335,7 +359,7 @@ mod tests {
 
     // One station, Delancey St, served by F and M from two platforms
     fn delancey_static_data() -> StaticData {
-        let mut static_data = StaticData::new();
+        let mut static_data = StaticData::empty(SupportedTransitSystem::NycSubway);
         for stop_id in ["F15N", "F15S"] {
             static_data.stop_lookup.insert(
                 StopID(String::from(stop_id)),
@@ -386,19 +410,77 @@ mod tests {
         ));
     }
 
+    // The channel contents the resolver task passes to try_resolve_station
+    fn resolver_inputs(
+        static_data: Option<StaticData>,
+        system_config: Option<ResolvedSystemConfig>,
+    ) -> (
+        watch::Receiver<Option<StaticData>>,
+        watch::Sender<Option<ResolvedSystemConfig>>,
+    ) {
+        let (_, rx_static_data) = watch::channel(static_data);
+        let (tx_system_config, _) = watch::channel(system_config);
+        (rx_static_data, tx_system_config)
+    }
+
     #[test]
-    fn resolve_station_fails_before_static_data_has_loaded() {
-        // What the resolver sees at boot, before the first static download finishes
-        let result = resolve_station(
+    fn try_resolve_station_resolves_when_static_data_matches_the_system() {
+        let (rx_static_data, tx_system_config) =
+            resolver_inputs(Some(delancey_static_data()), Some(two_feed_system()));
+
+        let resolved = try_resolve_station(
+            &rx_static_data,
+            &tx_system_config,
             &selection("Delancey St"),
-            &StaticData::new(),
-            &two_feed_system(),
         );
 
-        assert!(matches!(
-            result,
-            Err(StationResolveError::UnknownStation(_))
-        ));
+        assert!(resolved.is_some());
+    }
+
+    #[test]
+    fn try_resolve_station_waits_for_static_data() {
+        // What the resolver sees at boot, before the first static download finishes
+        let (rx_static_data, tx_system_config) = resolver_inputs(None, Some(two_feed_system()));
+
+        let resolved = try_resolve_station(
+            &rx_static_data,
+            &tx_system_config,
+            &selection("Delancey St"),
+        );
+
+        assert!(resolved.is_none());
+    }
+
+    #[test]
+    fn try_resolve_station_waits_for_a_system_config() {
+        let (rx_static_data, tx_system_config) =
+            resolver_inputs(Some(delancey_static_data()), None);
+
+        let resolved = try_resolve_station(
+            &rx_static_data,
+            &tx_system_config,
+            &selection("Delancey St"),
+        );
+
+        assert!(resolved.is_none());
+    }
+
+    #[test]
+    fn try_resolve_station_refuses_static_data_from_another_system() {
+        // Right after a system switch, before the new system's static data lands. The station
+        // exists in the old data, so only the system check stops it resolving there
+        let mut static_data = delancey_static_data();
+        static_data.built_from_system = SupportedTransitSystem::MtaMetroNorth;
+        let (rx_static_data, tx_system_config) =
+            resolver_inputs(Some(static_data), Some(two_feed_system()));
+
+        let resolved = try_resolve_station(
+            &rx_static_data,
+            &tx_system_config,
+            &selection("Delancey St"),
+        );
+
+        assert!(resolved.is_none());
     }
 
     #[test]

@@ -104,6 +104,7 @@ pub fn feed_entity_to_packet(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::SupportedTransitSystem;
     use gtfs_rt_decode::gtfs_rt_types::{
         TripDescriptor, TripUpdate,
         trip_update::{StopTimeEvent, StopTimeUpdate},
@@ -112,7 +113,7 @@ mod tests {
     const NOW: u64 = 1_000_000;
 
     fn static_data() -> StaticData {
-        let mut static_data = StaticData::new();
+        let mut static_data = StaticData::empty(SupportedTransitSystem::NycSubway);
         for (stop_id, station_name) in [
             ("101N", "Test Stop 1"),
             ("201N", "Test Stop 2"),
