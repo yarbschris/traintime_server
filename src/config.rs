@@ -93,9 +93,9 @@ impl ResolvedSystemConfig {
 }
 
 #[derive(Debug, serde::Deserialize)]
-pub struct RawSystemConfig {
-    pub gtfs_static_endpoint: String,
-    pub gtfs_rt_endpoints: Vec<GtfsRtEndpoint>,
+struct RawSystemConfig {
+    gtfs_static_endpoint: String,
+    gtfs_rt_endpoints: Vec<GtfsRtEndpoint>,
 }
 
 impl RawSystemConfig {
