@@ -1,5 +1,5 @@
 use crate::{
-    error::{StartError, StationResolveError, SystemConfigError},
+    error::{StationResolveError, SystemConfigError},
     types::{
         gtfs::{RouteID, StationName, StopID},
         static_data::StaticData,
@@ -13,40 +13,38 @@ const NYC_SUBWAY_CONFIG: &str = include_str!("../system_configs/nyc_subway.yml")
 const BOSTON_TRANSIT_CONFIG: &str = include_str!("../system_configs/boston_transit.yml");
 const MTA_METRO_NORTH_CONFIG: &str = include_str!("../system_configs/mta_metro_north.yml");
 
+pub struct SelectionInResolvedOut {
+    pub tx_selected_station: watch::Sender<SelectedStation>,
+    pub rx_resolved_system_config: watch::Receiver<Option<ResolvedSystemConfig>>,
+    pub rx_resolved_station: watch::Receiver<Option<ResolvedStation>>,
+}
 // Create watch channels for configurations, spawn resolve station task
 pub fn setup_config(
     fallback_selection: SelectedStation,
     rx_static_data: watch::Receiver<Option<StaticData>>,
-) -> Result<
-    (
-        watch::Sender<SelectedStation>,
-        watch::Receiver<Option<ResolvedSystemConfig>>,
-        watch::Receiver<Option<ResolvedStation>>,
-        JoinHandle<()>,
-    ),
-    StartError,
-> {
+) -> (SelectionInResolvedOut, JoinHandle<()>) {
     // Watch channel for station config
     let (tx_selected_station, rx_selected_station) = watch::channel(fallback_selection);
 
     // Watch channel for transit system configuration.
-    let (tx_system_config, rx_system_config) = watch::channel(None);
+    let (tx_resolved_system_config, rx_resolved_system_config) = watch::channel(None);
 
     let (tx_resolved_station, rx_resolved_station) = watch::channel(None);
 
     let resolve_task_join_handle = tokio::spawn(resolve_station_on_selection_change(
         rx_selected_station,
         rx_static_data,
-        tx_system_config.clone(),
+        tx_resolved_system_config.clone(),
         tx_resolved_station,
     ));
 
-    Ok((
+    let selection_in_resolved_out = SelectionInResolvedOut {
         tx_selected_station,
-        rx_system_config,
+        rx_resolved_system_config,
         rx_resolved_station,
-        resolve_task_join_handle,
-    ))
+    };
+
+    (selection_in_resolved_out, resolve_task_join_handle)
 }
 
 #[derive(Debug, serde::Deserialize, Clone)]
@@ -181,6 +179,20 @@ async fn resolve_station_on_selection_change(
     }
 }
 
+// We must update the resolved system config during refresh if the resolved system config watch
+// channel currently holds None or the resolved system config's system is different from user selection
+fn resolve_needs_system_config_refresh(
+    selected_station: &SelectedStation,
+    tx_resolved_system_config: &watch::Sender<Option<ResolvedSystemConfig>>,
+) -> bool {
+    tx_resolved_system_config
+        .borrow()
+        .as_ref()
+        .is_none_or(|resolved_system_config| {
+            resolved_system_config.supported_system != selected_station.transit_system
+        })
+}
+
 // Validate the necessary conditions for resolving station, return None otherwise
 fn try_resolve_station(
     rx_static_data: &watch::Receiver<Option<StaticData>>,
@@ -209,20 +221,6 @@ fn try_resolve_station(
             None
         }
     }
-}
-
-// We must update the resolved system config during refresh if the resolved system config watch
-// channel currently holds None or the resolved system config's system is different from user selection
-fn resolve_needs_system_config_refresh(
-    selected_station: &SelectedStation,
-    tx_resolved_system_config: &watch::Sender<Option<ResolvedSystemConfig>>,
-) -> bool {
-    tx_resolved_system_config
-        .borrow()
-        .as_ref()
-        .is_none_or(|resolved_system_config| {
-            resolved_system_config.supported_system != selected_station.transit_system
-        })
 }
 
 fn resolve_system(sel: &SelectedStation) -> Result<ResolvedSystemConfig, SystemConfigError> {

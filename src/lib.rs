@@ -11,7 +11,6 @@ pub mod types;
 
 use crate::config::SelectedStation;
 use crate::types::{gtfs, traintime_packet::TraintimePacket};
-use error::StartError;
 use log::info;
 use tokio::sync::{mpsc, watch};
 
@@ -20,32 +19,32 @@ use tokio::sync::{mpsc, watch};
 /// tokio runtime; the caller decides what to do with the packets.
 pub async fn start(
     fallback_station: SelectedStation,
-) -> Result<
-    (
-        mpsc::Receiver<Vec<TraintimePacket>>,
-        watch::Sender<SelectedStation>,
-    ),
-    StartError,
-> {
+) -> (
+    mpsc::Receiver<Vec<TraintimePacket>>,
+    watch::Sender<SelectedStation>,
+) {
     info!("Starting Server");
 
     let (tx_static_data, rx_static_data) = watch::channel(None);
-
-    let (
-        tx_selected_station,
-        rx_resolved_system_config,
-        rx_resolved_station,
-        _resolve_task_join_handle,
-    ) = config::setup_config(fallback_station, rx_static_data.clone())?;
+    let (selection_in_resolved_out, _resolve_task_join_handle) =
+        config::setup_config(fallback_station, rx_static_data.clone());
 
     // MPSC for Traintime Packets
     let (tx_traintime_packets, rx_traintime_packets) = mpsc::channel(2);
 
-    let _static_join_handle =
-        static_funcs::setup_gtfs_static(tx_static_data, rx_resolved_system_config.clone());
+    let _static_join_handle = static_funcs::setup_gtfs_static(
+        tx_static_data,
+        selection_in_resolved_out.rx_resolved_system_config.clone(),
+    );
 
-    let _rt_join_handle =
-        rt_funcs::setup_gtfs_rt(rx_resolved_station, rx_static_data, tx_traintime_packets);
+    let _rt_join_handle = rt_funcs::setup_gtfs_rt(
+        selection_in_resolved_out.rx_resolved_station,
+        rx_static_data,
+        tx_traintime_packets,
+    );
 
-    Ok((rx_traintime_packets, tx_selected_station))
+    (
+        rx_traintime_packets,
+        selection_in_resolved_out.tx_selected_station,
+    )
 }

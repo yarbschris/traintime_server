@@ -19,6 +19,12 @@ impl StationName {
     }
 }
 
+impl Default for StationName {
+    fn default() -> Self {
+        StationName::new()
+    }
+}
+
 impl Display for StationName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)

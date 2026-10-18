@@ -1,34 +1,4 @@
 use crate::types::gtfs::{RouteID, StationName};
-use tokio::sync::watch;
-
-#[derive(Debug)]
-pub enum StartError {
-    Config(SystemConfigError),
-    StationConfigClosed(watch::error::RecvError),
-}
-
-impl std::fmt::Display for StartError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Config(e) => write!(f, "error reading configuration: {e}"),
-            Self::StationConfigClosed(e) => write!(f, "station config watch channel closed: {e}"),
-        }
-    }
-}
-
-impl std::error::Error for StartError {}
-
-impl From<SystemConfigError> for StartError {
-    fn from(e: SystemConfigError) -> Self {
-        Self::Config(e)
-    }
-}
-
-impl From<watch::error::RecvError> for StartError {
-    fn from(e: watch::error::RecvError) -> Self {
-        Self::StationConfigClosed(e)
-    }
-}
 
 #[derive(Debug)]
 pub enum ResolveSelectionError {
