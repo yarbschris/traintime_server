@@ -69,7 +69,7 @@ impl ResolvedSystemConfig {
     fn from_yaml(system: &SupportedTransitSystem, yaml: &str) -> Result<Self, SystemConfigError> {
         let raw = RawSystemConfig::parse_config(yaml)?;
         ResolvedSystemConfig {
-            supported_system: system.clone(),
+            supported_system: *system,
             gtfs_static_endpoint: raw.gtfs_static_endpoint,
             gtfs_rt_endpoints: raw.gtfs_rt_endpoints,
         }
@@ -90,15 +90,15 @@ impl ResolvedSystemConfig {
         Ok(self)
     }
 
-    pub fn get_supported_system(&self) -> &SupportedTransitSystem {
+    pub fn supported_system(&self) -> &SupportedTransitSystem {
         &self.supported_system
     }
 
-    pub fn get_gtfs_static_endpoint(&self) -> &String {
+    pub fn gtfs_static_endpoint(&self) -> &str {
         &self.gtfs_static_endpoint
     }
 
-    pub fn get_gtfs_rt_endpoints(&self) -> &Vec<GtfsRtEndpoint> {
+    pub fn gtfs_rt_endpoints(&self) -> &[GtfsRtEndpoint] {
         &self.gtfs_rt_endpoints
     }
 }
@@ -311,7 +311,7 @@ pub fn get_stop_ids_by_station_name(
         .collect())
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq)]
 pub enum SupportedTransitSystem {
     NycSubway,
     BostonTransit,

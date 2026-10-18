@@ -39,7 +39,7 @@ async fn fetch_static_handler(
                 // Need to reset last etag if we change systems
                 last_etag = None;
                 // Also clear static data for old system
-                tx_static_data.send_replace(None);
+                clear_static_data(&tx_static_data);
             },
         }
 
@@ -67,7 +67,7 @@ async fn refresh_static_data(
     let resolved_system_config_option = { rx_resolved_system_config.borrow().as_ref().cloned() };
 
     if let Some(resolved_system_config) = resolved_system_config_option {
-        let endpoint = resolved_system_config.get_gtfs_static_endpoint().clone();
+        let endpoint = resolved_system_config.gtfs_static_endpoint();
         let response = fetch_gtfs_static_data(endpoint, http_client).await?;
         let new_etag = response.headers().get("etag").cloned();
         if should_skip_update(last_etag, &new_etag) {
@@ -78,7 +78,7 @@ async fn refresh_static_data(
         info!("Building retained static data structure...");
         let static_data = static_data::StaticData::build_from_bytes(
             response.bytes().await?,
-            resolved_system_config.get_supported_system().clone(),
+            *resolved_system_config.supported_system(),
         )?;
 
         // System could have been changed during the build. Make sure that we built for the correct
@@ -86,10 +86,10 @@ async fn refresh_static_data(
         let is_current = rx_resolved_system_config
             .borrow()
             .as_ref()
-            .is_some_and(|c| c.get_supported_system() == &static_data.built_from_system);
+            .is_some_and(|c| c.supported_system() == &static_data.built_from_system);
         if !is_current {
             warn!("System changed during static data build, cannot send new static data");
-            tx_static_data.send_replace(None);
+            clear_static_data(tx_static_data);
             return Ok(());
         }
 
@@ -101,9 +101,14 @@ async fn refresh_static_data(
         Ok(())
     } else {
         debug!("No system config loaded, clearing static data");
-        tx_static_data.send_replace(None);
+        clear_static_data(tx_static_data);
         Ok(())
     }
+}
+
+// Set static_data to `None`, waking receivers only if it was `Some`
+fn clear_static_data(tx_static_data: &watch::Sender<Option<StaticData>>) {
+    tx_static_data.send_if_modified(|static_data| static_data.take().is_some());
 }
 
 // Don't update static data if new etag exists and is same as last_etag, else we should update
@@ -119,13 +124,13 @@ pub fn should_skip_update(last: &Option<HeaderValue>, new: &Option<HeaderValue>)
 
 // Make a request to the endpoint which provides gtfs static data
 async fn fetch_gtfs_static_data(
-    gtfs_static_endpoint: String,
+    gtfs_static_endpoint: &str,
     http_client: &reqwest::Client,
 ) -> Result<Response, reqwest::Error> {
     info!("Fetching GTFS Static Data...");
 
     let response = http_client
-        .get(&gtfs_static_endpoint)
+        .get(gtfs_static_endpoint)
         .send()
         .await?
         .error_for_status()?;
@@ -138,7 +143,7 @@ async fn fetch_gtfs_static_data(
 // has not yet been updated. Skip if only 1 endpoint bc route list is not required in
 // this case
 pub fn warn_unaccounted_for_routes(static_data: &StaticData, system: &ResolvedSystemConfig) {
-    let endpoints = &system.get_gtfs_rt_endpoints();
+    let endpoints = system.gtfs_rt_endpoints();
     if endpoints.len() <= 1 {
         return;
     }
@@ -166,7 +171,7 @@ fn collect_static_data_routes(static_data: &StaticData) -> HashSet<&RouteID> {
 fn collect_endpoint_routes(system: &ResolvedSystemConfig) -> HashSet<&RouteID> {
     HashSet::from_iter(
         system
-            .get_gtfs_rt_endpoints()
+            .gtfs_rt_endpoints()
             .iter()
             // Filter Map is okay because we validate that each endpoint has Some(Routes) at config parsing
             .filter_map(|endpoint| endpoint.routes.as_ref())
