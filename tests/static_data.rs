@@ -1,7 +1,7 @@
 use prost::bytes::Bytes;
 use reqwest::header::HeaderValue;
 use server::config::get_stop_ids_by_station_name;
-use server::error::{GtfsStaticError, ResolveError};
+use server::error::{GtfsStaticError, StationResolveError};
 use server::static_funcs::should_skip_update;
 use server::types::gtfs::{StationName, StopID};
 use server::types::static_data::StaticData;
@@ -27,7 +27,10 @@ fn sorted_routes(static_data: &StaticData, station_name: &str) -> Vec<String> {
     routes
 }
 
-fn stop_ids(static_data: &StaticData, station_name: &str) -> Result<Vec<StopID>, ResolveError> {
+fn stop_ids(
+    static_data: &StaticData,
+    station_name: &str,
+) -> Result<Vec<StopID>, StationResolveError> {
     get_stop_ids_by_station_name(&StationName::from(station_name), static_data)
 }
 
@@ -139,7 +142,7 @@ fn relevant_stops_are_every_platform_with_the_station_name() {
     // The unqualified name belongs to neither
     assert!(matches!(
         stop_ids(&static_data, "Test Stop 3"),
-        Err(ResolveError::UnknownStation(_))
+        Err(StationResolveError::UnknownStation(_))
     ));
 }
 
@@ -149,7 +152,7 @@ fn relevant_stops_are_an_error_for_unknown_station() {
 
     assert!(matches!(
         stop_ids(&static_data, "Not A Station"),
-        Err(ResolveError::UnknownStation(_))
+        Err(StationResolveError::UnknownStation(_))
     ));
 }
 

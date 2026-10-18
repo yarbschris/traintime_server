@@ -1,6 +1,6 @@
 use gtfs_rt_decode::gtfs_rt_types::{FeedEntity, FeedMessage};
 use prost::bytes::Bytes;
-use server::config::{SupportedTransitSystem, TransitSystemConfig, get_stop_ids_by_station_name};
+use server::config::{ResolvedSystemConfig, SupportedTransitSystem, get_stop_ids_by_station_name};
 use server::rt_funcs::decode_gtfs_rt;
 use server::types::gtfs::{StationName, StopID};
 use server::types::static_data::StaticData;
@@ -202,7 +202,7 @@ fn decode_rejects_bytes_that_are_not_a_feed() {
 #[test]
 fn nyc_config_lists_the_routes_the_fixture_carries() {
     let message = decode_fixture();
-    let config = TransitSystemConfig::read_config_by_system(&SupportedTransitSystem::NycSubway)
+    let config = ResolvedSystemConfig::from_system(&SupportedTransitSystem::NycSubway)
         .expect("bundled NYC config should load");
     let endpoint = config
         .gtfs_rt_endpoints

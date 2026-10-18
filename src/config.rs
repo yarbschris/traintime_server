@@ -1,11 +1,12 @@
 use crate::{
-    error::{ConfigError, ResolveError, StartError},
+    error::{StartError, StationResolveError, SystemConfigError},
     types::{
         gtfs::{RouteID, StationName, StopID},
         static_data::StaticData,
     },
 };
 use log::warn;
+use serde::Deserialize;
 use tokio::{sync::watch, task::JoinHandle};
 
 const NYC_SUBWAY_CONFIG: &str = include_str!("../system_configs/nyc_subway.yml");
@@ -14,88 +15,100 @@ const MTA_METRO_NORTH_CONFIG: &str = include_str!("../system_configs/mta_metro_n
 
 // Create watch channels for configurations, spawn resolve station task
 pub fn setup_config(
-    system: SupportedTransitSystem,
+    fallback_selection: SelectedStation,
     rx_static_data: watch::Receiver<StaticData>,
 ) -> Result<
     (
-        watch::Sender<TransitSystemConfig>,
-        watch::Receiver<TransitSystemConfig>,
         watch::Sender<SelectedStation>,
+        watch::Receiver<Option<ResolvedSystemConfig>>,
         watch::Receiver<Option<ResolvedStation>>,
         JoinHandle<()>,
     ),
     StartError,
 > {
-    // Watch channel for transit system configuration.
-    let (tx_system_config, rx_system_config) =
-        watch::channel(TransitSystemConfig::read_config_by_system(&system)?);
-
     // Watch channel for station config
-    let (tx_selected_station, rx_selected_station) = watch::channel(SelectedStation::new(system));
+    let (tx_selected_station, rx_selected_station) = watch::channel(fallback_selection);
+
+    // Watch channel for transit system configuration.
+    let (tx_system_config, rx_system_config) = watch::channel(None);
 
     let (tx_resolved_station, rx_resolved_station) = watch::channel(None);
 
     let resolve_task_join_handle = tokio::spawn(resolve_station_on_selection_change(
         rx_selected_station,
         rx_static_data,
-        rx_system_config.clone(),
+        tx_system_config.clone(),
         tx_resolved_station,
     ));
 
     Ok((
-        tx_system_config,
-        rx_system_config,
         tx_selected_station,
+        rx_system_config,
         rx_resolved_station,
         resolve_task_join_handle,
     ))
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, Clone)]
 pub struct GtfsRtEndpoint {
     pub url: String,
     pub routes: Option<Vec<RouteID>>,
 }
 
-#[derive(Debug, serde::Deserialize)]
-pub struct TransitSystemConfig {
+#[derive(Debug, serde::Deserialize, Clone)]
+pub struct ResolvedSystemConfig {
+    pub supported_system: SupportedTransitSystem,
     pub gtfs_static_endpoint: String,
     pub gtfs_rt_endpoints: Vec<GtfsRtEndpoint>,
 }
 
-impl TransitSystemConfig {
-    fn parse_config(config: &str) -> Result<TransitSystemConfig, serde_norway::Error> {
-        serde_norway::from_str(config)
+impl ResolvedSystemConfig {
+    pub fn from_system(system: &SupportedTransitSystem) -> Result<Self, SystemConfigError> {
+        Self::from_yaml(system, bundled_config_yaml(system))
     }
 
-    fn validate_config(self) -> Result<TransitSystemConfig, ConfigError> {
+    fn from_yaml(system: &SupportedTransitSystem, yaml: &str) -> Result<Self, SystemConfigError> {
+        let raw = RawSystemConfig::parse_config(yaml)?;
+        ResolvedSystemConfig {
+            supported_system: system.clone(),
+            gtfs_static_endpoint: raw.gtfs_static_endpoint,
+            gtfs_rt_endpoints: raw.gtfs_rt_endpoints,
+        }
+        .validate_config()
+    }
+
+    fn validate_config(self) -> Result<ResolvedSystemConfig, SystemConfigError> {
         if self.gtfs_rt_endpoints.is_empty() {
-            return Err(ConfigError::NoRealtimeEndpoints);
+            return Err(SystemConfigError::NoRealtimeEndpoints);
         }
         if self.gtfs_rt_endpoints.len() > 1 {
             for endpoint in &self.gtfs_rt_endpoints {
                 if endpoint.routes.is_none() {
-                    return Err(ConfigError::NoRoutesList(endpoint.url.clone()));
+                    return Err(SystemConfigError::NoRoutesList(endpoint.url.clone()));
                 }
             }
         }
         Ok(self)
     }
+}
 
-    fn from_yaml(s: &str) -> Result<Self, ConfigError> {
-        Self::parse_config(s)?.validate_config()
+#[derive(Debug, serde::Deserialize)]
+pub struct RawSystemConfig {
+    pub gtfs_static_endpoint: String,
+    pub gtfs_rt_endpoints: Vec<GtfsRtEndpoint>,
+}
+
+impl RawSystemConfig {
+    fn parse_config(config: &str) -> Result<RawSystemConfig, serde_norway::Error> {
+        serde_norway::from_str(config)
     }
+}
 
-    pub fn read_config_by_system(
-        system: &SupportedTransitSystem,
-    ) -> Result<TransitSystemConfig, ConfigError> {
-        let config_yaml = match system {
-            SupportedTransitSystem::NycSubway => NYC_SUBWAY_CONFIG,
-            SupportedTransitSystem::BostonTransit => BOSTON_TRANSIT_CONFIG,
-            SupportedTransitSystem::MtaMetroNorth => MTA_METRO_NORTH_CONFIG,
-        };
-
-        TransitSystemConfig::from_yaml(config_yaml)
+fn bundled_config_yaml(system: &SupportedTransitSystem) -> &'static str {
+    match system {
+        SupportedTransitSystem::NycSubway => NYC_SUBWAY_CONFIG,
+        SupportedTransitSystem::BostonTransit => BOSTON_TRANSIT_CONFIG,
+        SupportedTransitSystem::MtaMetroNorth => MTA_METRO_NORTH_CONFIG,
     }
 }
 
@@ -121,13 +134,16 @@ pub struct ResolvedStation {
     pub relevant_endpoints: Vec<String>,
 }
 
-// Spawned Task: Watch for change in selected_station, resolve station.
+// Spawned Task: Watch for change in selected_station, resolve system and station.
 async fn resolve_station_on_selection_change(
     mut rx_selected_station: watch::Receiver<SelectedStation>,
     mut rx_static_data: watch::Receiver<StaticData>,
-    rx_system_config: watch::Receiver<TransitSystemConfig>,
+    tx_resolved_system_config: watch::Sender<Option<ResolvedSystemConfig>>,
     tx_resolved_station: watch::Sender<Option<ResolvedStation>>,
 ) {
+    // TODO: On startup right now, we set an initial value, we want to resolve immediately so that
+    // static refresh task and resolve task do not hang waiting for each other
+    rx_selected_station.mark_changed();
     loop {
         tokio::select! {
             r = rx_selected_station.changed() => if r.is_err() { break },
@@ -135,27 +151,66 @@ async fn resolve_station_on_selection_change(
         }
 
         let selected_station = rx_selected_station.borrow_and_update();
-        let static_data = rx_static_data.borrow();
-        let system_config = rx_system_config.borrow();
-        match resolve_station(&selected_station, &static_data, &system_config) {
-            Ok(new_resolved_station) => {
-                tx_resolved_station
-                    .send_modify(|resolved_station| *resolved_station = Some(new_resolved_station));
-            }
-            Err(e) => {
-                warn!("{e}");
-                tx_resolved_station.send_modify(|resolved_station| *resolved_station = None);
+
+        if resolve_needs_system_config_refresh(&selected_station, &tx_resolved_system_config) {
+            match resolve_system(&selected_station) {
+                Ok(resolved_system_config) => {
+                    tx_resolved_system_config.send_replace(Some(resolved_system_config));
+                    // Need to force static data refresh
+                }
+                Err(e) => {
+                    warn!("{e}");
+                    tx_resolved_system_config.send_replace(None);
+                }
             }
         }
+
+        if let Some(resolved_system_config) = tx_resolved_system_config.borrow().as_ref() {
+            let static_data = rx_static_data.borrow();
+            match resolve_station(&selected_station, &static_data, resolved_system_config) {
+                Ok(new_resolved_station) => {
+                    tx_resolved_station.send_modify(|resolved_station| {
+                        *resolved_station = Some(new_resolved_station)
+                    });
+                }
+                Err(e) => {
+                    warn!("{e}");
+                    tx_resolved_station.send_modify(|resolved_station| *resolved_station = None);
+                }
+            }
+        } else {
+            warn!(
+                "Cannot resolve station: no system config detected, will retry on next static data update or selection"
+            );
+            continue;
+        }
     }
+}
+
+// We must update the resolved system config during refresh if the resolved system config watch
+// channel currently holds None or the resolved system config's system is different from user selection
+fn resolve_needs_system_config_refresh(
+    sel: &SelectedStation,
+    tx_resolved_system_config: &watch::Sender<Option<ResolvedSystemConfig>>,
+) -> bool {
+    tx_resolved_system_config
+        .borrow()
+        .as_ref()
+        .is_none_or(|resolved_system_config| {
+            resolved_system_config.supported_system != sel.transit_system
+        })
+}
+
+fn resolve_system(sel: &SelectedStation) -> Result<ResolvedSystemConfig, SystemConfigError> {
+    ResolvedSystemConfig::from_system(&sel.transit_system)
 }
 
 // Resolve the user's selected station into the data we actually need at runtime
 fn resolve_station(
     sel: &SelectedStation,
     static_data: &StaticData,
-    system: &TransitSystemConfig,
-) -> Result<ResolvedStation, ResolveError> {
+    system: &ResolvedSystemConfig,
+) -> Result<ResolvedStation, StationResolveError> {
     let routes = get_relevant_routes(&sel.station_name, static_data)?;
     let stop_ids = get_stop_ids_by_station_name(&sel.station_name, static_data)?;
     let relevant_endpoints: Vec<String> = system
@@ -166,7 +221,7 @@ fn resolve_station(
         .collect();
 
     if relevant_endpoints.is_empty() {
-        return Err(ResolveError::EndpointsDoNotCoverAnyRoutes(routes));
+        return Err(StationResolveError::EndpointsDoNotCoverAnyRoutes(routes));
     }
 
     Ok(ResolvedStation {
@@ -180,10 +235,10 @@ fn resolve_station(
 pub fn get_relevant_routes(
     station_name: &StationName,
     static_data: &StaticData,
-) -> Result<Vec<RouteID>, ResolveError> {
+) -> Result<Vec<RouteID>, StationResolveError> {
     match static_data.route_lookup.get(station_name) {
         Some(ids) => Ok(ids.clone()),
-        None => Err(ResolveError::UnknownStation(station_name.clone())),
+        None => Err(StationResolveError::UnknownStation(station_name.clone())),
     }
 }
 
@@ -204,7 +259,7 @@ fn endpoint_is_relevant(endpoint: &GtfsRtEndpoint, relevant_routes: &[RouteID]) 
 pub fn get_stop_ids_by_station_name(
     station_name: &StationName,
     static_data: &StaticData,
-) -> Result<Vec<StopID>, ResolveError> {
+) -> Result<Vec<StopID>, StationResolveError> {
     let matching_entries: Vec<(&StopID, &StationName)> = static_data
         .stop_lookup
         .iter()
@@ -212,7 +267,7 @@ pub fn get_stop_ids_by_station_name(
         .collect();
 
     if matching_entries.is_empty() {
-        return Err(ResolveError::UnknownStation(station_name.clone()));
+        return Err(StationResolveError::UnknownStation(station_name.clone()));
     }
 
     Ok(matching_entries
@@ -221,7 +276,7 @@ pub fn get_stop_ids_by_station_name(
         .collect())
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 pub enum SupportedTransitSystem {
     NycSubway,
     BostonTransit,
@@ -270,12 +325,12 @@ mod tests {
     }
 
     // Two feeds split by route, like NYC's
-    fn two_feed_system() -> TransitSystemConfig {
+    fn two_feed_system() -> ResolvedSystemConfig {
         let yaml = "gtfs_static_endpoint: https://example.com/static.zip\n\
                     gtfs_rt_endpoints:\n  \
                     - url: https://example.com/ace\n    routes: [\"A\", \"C\", \"E\"]\n  \
                     - url: https://example.com/bdfm\n    routes: [\"B\", \"D\", \"F\", \"M\"]\n";
-        TransitSystemConfig::from_yaml(yaml).unwrap()
+        ResolvedSystemConfig::from_yaml(&SupportedTransitSystem::NycSubway, yaml).unwrap()
     }
 
     // One station, Delancey St, served by F and M from two platforms
@@ -327,7 +382,7 @@ mod tests {
 
         assert!(matches!(
             result,
-            Err(ResolveError::UnknownStation(name)) if name == StationName::from("Not A Station")
+            Err(StationResolveError::UnknownStation(name)) if name == StationName::from("Not A Station")
         ));
     }
 
@@ -340,7 +395,10 @@ mod tests {
             &two_feed_system(),
         );
 
-        assert!(matches!(result, Err(ResolveError::UnknownStation(_))));
+        assert!(matches!(
+            result,
+            Err(StationResolveError::UnknownStation(_))
+        ));
     }
 
     #[test]
@@ -350,7 +408,7 @@ mod tests {
             SupportedTransitSystem::BostonTransit,
             SupportedTransitSystem::MtaMetroNorth,
         ] {
-            let config = TransitSystemConfig::read_config_by_system(&system).unwrap();
+            let config = ResolvedSystemConfig::from_system(&system).unwrap();
 
             assert!(!config.gtfs_static_endpoint.is_empty());
             assert!(!config.gtfs_rt_endpoints.is_empty());
@@ -363,7 +421,8 @@ mod tests {
         let yaml = "gtfs_static_endpoint: https://example.com/static.zip\n\
                     gtfs_rt_endpoints:\n  - url: https://example.com/rt\n";
 
-        let config = TransitSystemConfig::from_yaml(yaml).unwrap();
+        let config =
+            ResolvedSystemConfig::from_yaml(&SupportedTransitSystem::NycSubway, yaml).unwrap();
 
         assert_eq!(config.gtfs_rt_endpoints.len(), 1);
         assert_eq!(config.gtfs_rt_endpoints[0].url, "https://example.com/rt");
@@ -379,11 +438,11 @@ mod tests {
                     - url: https://example.com/ace\n    routes: [\"A\", \"C\", \"E\"]\n  \
                     - url: https://example.com/bdfm\n";
 
-        let result = TransitSystemConfig::from_yaml(yaml);
+        let result = ResolvedSystemConfig::from_yaml(&SupportedTransitSystem::NycSubway, yaml);
 
         assert!(matches!(
             result,
-            Err(ConfigError::NoRoutesList(url)) if url == "https://example.com/bdfm"
+            Err(SystemConfigError::NoRoutesList(url)) if url == "https://example.com/bdfm"
         ));
     }
 
@@ -405,7 +464,8 @@ mod tests {
         let yaml = "gtfs_static_endpoint: https://example.com/static.zip\n\
                     gtfs_rt_endpoints:\n  - url: https://example.com/rt\n    routes: [\"A\", \"6X\"]\n";
 
-        let config = TransitSystemConfig::from_yaml(yaml).unwrap();
+        let config =
+            ResolvedSystemConfig::from_yaml(&SupportedTransitSystem::NycSubway, yaml).unwrap();
 
         assert_eq!(
             config.gtfs_rt_endpoints[0].routes,
@@ -418,9 +478,12 @@ mod tests {
         let yaml = "gtfs_static_endpoint: https://example.com/static.zip\n\
                     gtfs_rt_endpoints: []\n";
 
-        let result = TransitSystemConfig::from_yaml(yaml);
+        let result = ResolvedSystemConfig::from_yaml(&SupportedTransitSystem::NycSubway, yaml);
 
-        assert!(matches!(result, Err(ConfigError::NoRealtimeEndpoints)));
+        assert!(matches!(
+            result,
+            Err(SystemConfigError::NoRealtimeEndpoints)
+        ));
     }
 
     #[test]
@@ -428,8 +491,8 @@ mod tests {
         // A missing key is malformed YAML for this struct, not an empty list
         let yaml = "gtfs_static_endpoint: https://example.com/static.zip\n";
 
-        let result = TransitSystemConfig::from_yaml(yaml);
+        let result = ResolvedSystemConfig::from_yaml(&SupportedTransitSystem::NycSubway, yaml);
 
-        assert!(matches!(result, Err(ConfigError::Parse(_))));
+        assert!(matches!(result, Err(SystemConfigError::Parse(_))));
     }
 }

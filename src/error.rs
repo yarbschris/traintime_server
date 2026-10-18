@@ -6,7 +6,7 @@ use tokio::sync::watch;
 
 #[derive(Debug)]
 pub enum StartError {
-    Config(ConfigError),
+    Config(SystemConfigError),
     StationConfigClosed(watch::error::RecvError),
 }
 
@@ -21,8 +21,8 @@ impl std::fmt::Display for StartError {
 
 impl std::error::Error for StartError {}
 
-impl From<ConfigError> for StartError {
-    fn from(e: ConfigError) -> Self {
+impl From<SystemConfigError> for StartError {
+    fn from(e: SystemConfigError) -> Self {
         Self::Config(e)
     }
 }
@@ -34,13 +34,30 @@ impl From<watch::error::RecvError> for StartError {
 }
 
 #[derive(Debug)]
-pub enum ConfigError {
+pub enum ResolveSelectionError {
+    System(SystemConfigError),
+    Station(StationResolveError),
+}
+
+impl std::fmt::Display for ResolveSelectionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::System(e) => write!(f, "{e}"),
+            Self::Station(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for ResolveSelectionError {}
+
+#[derive(Debug)]
+pub enum SystemConfigError {
     Parse(serde_norway::Error),
     NoRealtimeEndpoints,
     NoRoutesList(String),
 }
 
-impl std::fmt::Display for ConfigError {
+impl std::fmt::Display for SystemConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Parse(e) => write!(f, "{e}"),
@@ -53,21 +70,21 @@ impl std::fmt::Display for ConfigError {
     }
 }
 
-impl std::error::Error for ConfigError {}
+impl std::error::Error for SystemConfigError {}
 
-impl From<serde_norway::Error> for ConfigError {
+impl From<serde_norway::Error> for SystemConfigError {
     fn from(e: serde_norway::Error) -> Self {
         Self::Parse(e)
     }
 }
 
 #[derive(Debug)]
-pub enum ResolveError {
+pub enum StationResolveError {
     UnknownStation(StationName),
     EndpointsDoNotCoverAnyRoutes(Vec<RouteID>),
 }
 
-impl std::fmt::Display for ResolveError {
+impl std::fmt::Display for StationResolveError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::UnknownStation(station_name) => {

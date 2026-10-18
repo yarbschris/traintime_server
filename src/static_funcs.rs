@@ -5,23 +5,23 @@ use std::collections::HashSet;
 use std::time::Duration;
 use tokio::sync::watch;
 
-use crate::config::TransitSystemConfig;
+use crate::config::ResolvedSystemConfig;
 use crate::error::GtfsStaticError;
 use crate::types::{gtfs::RouteID, static_data::StaticData};
 
 pub fn setup_gtfs_static(
     tx_active_static_data: watch::Sender<StaticData>,
-    rx_system_config: watch::Receiver<TransitSystemConfig>,
+    rx_resolved_system_config: watch::Receiver<Option<ResolvedSystemConfig>>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(fetch_static_handler(
         tx_active_static_data,
-        rx_system_config,
+        rx_resolved_system_config,
     ))
 }
 
 async fn fetch_static_handler(
     tx_active_static_data: watch::Sender<StaticData>,
-    rx_system_config: watch::Receiver<TransitSystemConfig>,
+    mut rx_resolved_system_config: watch::Receiver<Option<ResolvedSystemConfig>>,
 ) {
     let mut gtfs_static_fetch_interval = tokio::time::interval(Duration::from_hours(1));
     // To compare with fetched data etag to avoid uneccessary updates
@@ -30,10 +30,20 @@ async fn fetch_static_handler(
     let http_client = reqwest::Client::new();
 
     loop {
-        gtfs_static_fetch_interval.tick().await;
+        tokio::select! {
+            _ = gtfs_static_fetch_interval.tick() => {},
+            r = rx_resolved_system_config.changed() => {
+                // Need to reset last etag if we change systems
+                if r.is_err() {
+                    break;
+                }
+                last_etag = None;
+            },
+        }
+
         if let Err(e) = refresh_static_data(
             &http_client,
-            &rx_system_config,
+            &rx_resolved_system_config,
             &tx_active_static_data,
             &mut last_etag,
         )
@@ -47,30 +57,40 @@ async fn fetch_static_handler(
 // Fetch -> Check if update is needed -> Build retained structure -> Send -> Update etag
 async fn refresh_static_data(
     http_client: &reqwest::Client,
-    rx_system: &watch::Receiver<TransitSystemConfig>,
+    rx_resolved_system_config: &watch::Receiver<Option<ResolvedSystemConfig>>,
     tx_static_data: &watch::Sender<StaticData>,
     last_etag: &mut Option<HeaderValue>,
 ) -> Result<(), GtfsStaticError> {
-    let response = fetch_gtfs_static_data(rx_system.clone(), http_client).await?;
-    let new_etag = response.headers().get("etag").cloned();
-    if should_skip_update(last_etag, &new_etag) {
-        info!("No new static data found, skipping update...");
-        return Ok(());
+    // We clone the system config out of the watch channel to avoid holding the watch lock over .await calls
+    let resolved_system_config_option = { rx_resolved_system_config.borrow().as_ref().cloned() };
+
+    if let Some(resolved_system_config) = resolved_system_config_option {
+        let endpoint = resolved_system_config.gtfs_static_endpoint.clone();
+        let response = fetch_gtfs_static_data(endpoint, http_client).await?;
+        let new_etag = response.headers().get("etag").cloned();
+        if should_skip_update(last_etag, &new_etag) {
+            info!("No new static data found, skipping update...");
+            return Ok(());
+        }
+
+        info!("Building retained static data structure...");
+        let static_data = static_data::StaticData::build_from_bytes(response.bytes().await?)?;
+
+        let system = rx_resolved_system_config.borrow();
+        warn_unaccounted_for_routes(&static_data, &resolved_system_config);
+        drop(system);
+
+        info!("Sending retained static data structure...");
+        if let Err(e) = tx_static_data.send(static_data) {
+            return Err(GtfsStaticError::Send(e));
+        }
+        *last_etag = new_etag;
+        Ok(())
+    } else {
+        warn!("No resolved system, cannot update static data");
+        // TODO: Make StaticData channel an Option<StaticData>
+        Ok(())
     }
-
-    info!("Building retained static data structure...");
-    let static_data = static_data::StaticData::build_from_bytes(response.bytes().await?)?;
-
-    let system = rx_system.borrow();
-    warn_unaccounted_for_routes(&static_data, &system);
-    drop(system);
-
-    info!("Sending retained static data structure...");
-    if let Err(e) = tx_static_data.send(static_data) {
-        return Err(GtfsStaticError::Send(e));
-    }
-    *last_etag = new_etag;
-    Ok(())
 }
 
 // Don't update static data if new etag exists and is same as last_etag, else we should update
@@ -86,11 +106,10 @@ pub fn should_skip_update(last: &Option<HeaderValue>, new: &Option<HeaderValue>)
 
 // Make a request to the endpoint which provides gtfs static data
 async fn fetch_gtfs_static_data(
-    rx_system_config: watch::Receiver<TransitSystemConfig>,
+    gtfs_static_endpoint: String,
     http_client: &reqwest::Client,
 ) -> Result<Response, reqwest::Error> {
     info!("Fetching GTFS Static Data...");
-    let gtfs_static_endpoint = rx_system_config.borrow().gtfs_static_endpoint.clone();
 
     let response = http_client
         .get(&gtfs_static_endpoint)
@@ -105,7 +124,7 @@ async fn fetch_gtfs_static_data(
 // That means that the system has added a new route, and the system's yaml config
 // has not yet been updated. Skip if only 1 endpoint bc route list is not required in
 // this case
-pub fn warn_unaccounted_for_routes(static_data: &StaticData, system: &TransitSystemConfig) {
+pub fn warn_unaccounted_for_routes(static_data: &StaticData, system: &ResolvedSystemConfig) {
     let endpoints = &system.gtfs_rt_endpoints;
     if endpoints.len() <= 1 {
         return;
@@ -131,7 +150,7 @@ fn collect_static_data_routes(static_data: &StaticData) -> HashSet<&RouteID> {
 }
 
 // Routes are stored in an Vec<Option<Vec<RouteID>>>, extract to HashSet<&RouteID>
-fn collect_endpoint_routes(system: &TransitSystemConfig) -> HashSet<&RouteID> {
+fn collect_endpoint_routes(system: &ResolvedSystemConfig) -> HashSet<&RouteID> {
     HashSet::from_iter(
         system
             .gtfs_rt_endpoints
