@@ -1,23 +1,6 @@
 use crate::types::gtfs::{RouteID, StationName};
 
 #[derive(Debug)]
-pub enum ResolveSelectionError {
-    System(SystemConfigError),
-    Station(StationResolveError),
-}
-
-impl std::fmt::Display for ResolveSelectionError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::System(e) => write!(f, "{e}"),
-            Self::Station(e) => write!(f, "{e}"),
-        }
-    }
-}
-
-impl std::error::Error for ResolveSelectionError {}
-
-#[derive(Debug)]
 pub enum SystemConfigError {
     Parse(serde_norway::Error),
     NoRealtimeEndpoints,

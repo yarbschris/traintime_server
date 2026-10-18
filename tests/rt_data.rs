@@ -205,7 +205,7 @@ fn nyc_config_lists_the_routes_the_fixture_carries() {
     let config = ResolvedSystemConfig::from_system(&SupportedTransitSystem::NycSubway)
         .expect("bundled NYC config should load");
     let endpoint = config
-        .gtfs_rt_endpoints
+        .get_gtfs_rt_endpoints()
         .iter()
         .find(|endpoint| endpoint.url.ends_with("nyct%2Fgtfs"))
         .expect("NYC config should list the 1-7/S endpoint");

@@ -13,16 +13,17 @@ const NYC_SUBWAY_CONFIG: &str = include_str!("../system_configs/nyc_subway.yml")
 const BOSTON_TRANSIT_CONFIG: &str = include_str!("../system_configs/boston_transit.yml");
 const MTA_METRO_NORTH_CONFIG: &str = include_str!("../system_configs/mta_metro_north.yml");
 
-pub struct SelectionInResolvedOut {
+pub struct ResolverChannels {
     pub tx_selected_station: watch::Sender<SelectedStation>,
     pub rx_resolved_system_config: watch::Receiver<Option<ResolvedSystemConfig>>,
     pub rx_resolved_station: watch::Receiver<Option<ResolvedStation>>,
 }
+
 // Create watch channels for configurations, spawn resolve station task
 pub fn setup_config(
     fallback_selection: SelectedStation,
     rx_static_data: watch::Receiver<Option<StaticData>>,
-) -> (SelectionInResolvedOut, JoinHandle<()>) {
+) -> (ResolverChannels, JoinHandle<()>) {
     // Watch channel for station config
     let (tx_selected_station, rx_selected_station) = watch::channel(fallback_selection);
 
@@ -38,13 +39,13 @@ pub fn setup_config(
         tx_resolved_station,
     ));
 
-    let selection_in_resolved_out = SelectionInResolvedOut {
+    let resolver_channels = ResolverChannels {
         tx_selected_station,
         rx_resolved_system_config,
         rx_resolved_station,
     };
 
-    (selection_in_resolved_out, resolve_task_join_handle)
+    (resolver_channels, resolve_task_join_handle)
 }
 
 #[derive(Debug, serde::Deserialize, Clone)]
@@ -53,11 +54,11 @@ pub struct GtfsRtEndpoint {
     pub routes: Option<Vec<RouteID>>,
 }
 
-#[derive(Debug, serde::Deserialize, Clone)]
+#[derive(Debug, Clone)]
 pub struct ResolvedSystemConfig {
-    pub supported_system: SupportedTransitSystem,
-    pub gtfs_static_endpoint: String,
-    pub gtfs_rt_endpoints: Vec<GtfsRtEndpoint>,
+    supported_system: SupportedTransitSystem,
+    gtfs_static_endpoint: String,
+    gtfs_rt_endpoints: Vec<GtfsRtEndpoint>,
 }
 
 impl ResolvedSystemConfig {
@@ -87,6 +88,18 @@ impl ResolvedSystemConfig {
             }
         }
         Ok(self)
+    }
+
+    pub fn get_supported_system(&self) -> &SupportedTransitSystem {
+        &self.supported_system
+    }
+
+    pub fn get_gtfs_static_endpoint(&self) -> &String {
+        &self.gtfs_static_endpoint
+    }
+
+    pub fn get_gtfs_rt_endpoints(&self) -> &Vec<GtfsRtEndpoint> {
+        &self.gtfs_rt_endpoints
     }
 }
 

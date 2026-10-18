@@ -33,11 +33,13 @@ async fn fetch_static_handler(
         tokio::select! {
             _ = gtfs_static_fetch_interval.tick() => {},
             r = rx_resolved_system_config.changed() => {
-                // Need to reset last etag if we change systems
                 if r.is_err() {
                     break;
                 }
+                // Need to reset last etag if we change systems
                 last_etag = None;
+                // Also clear static data for old system
+                tx_static_data.send_replace(None);
             },
         }
 
@@ -65,7 +67,7 @@ async fn refresh_static_data(
     let resolved_system_config_option = { rx_resolved_system_config.borrow().as_ref().cloned() };
 
     if let Some(resolved_system_config) = resolved_system_config_option {
-        let endpoint = resolved_system_config.gtfs_static_endpoint.clone();
+        let endpoint = resolved_system_config.get_gtfs_static_endpoint().clone();
         let response = fetch_gtfs_static_data(endpoint, http_client).await?;
         let new_etag = response.headers().get("etag").cloned();
         if should_skip_update(last_etag, &new_etag) {
@@ -76,7 +78,7 @@ async fn refresh_static_data(
         info!("Building retained static data structure...");
         let static_data = static_data::StaticData::build_from_bytes(
             response.bytes().await?,
-            resolved_system_config.supported_system.clone(),
+            resolved_system_config.get_supported_system().clone(),
         )?;
 
         // System could have been changed during the build. Make sure that we built for the correct
@@ -84,7 +86,7 @@ async fn refresh_static_data(
         let is_current = rx_resolved_system_config
             .borrow()
             .as_ref()
-            .is_some_and(|c| c.supported_system == static_data.built_from_system);
+            .is_some_and(|c| c.get_supported_system() == &static_data.built_from_system);
         if !is_current {
             warn!("System changed during static data build, cannot send new static data");
             tx_static_data.send_replace(None);
@@ -136,7 +138,7 @@ async fn fetch_gtfs_static_data(
 // has not yet been updated. Skip if only 1 endpoint bc route list is not required in
 // this case
 pub fn warn_unaccounted_for_routes(static_data: &StaticData, system: &ResolvedSystemConfig) {
-    let endpoints = &system.gtfs_rt_endpoints;
+    let endpoints = &system.get_gtfs_rt_endpoints();
     if endpoints.len() <= 1 {
         return;
     }
@@ -164,7 +166,7 @@ fn collect_static_data_routes(static_data: &StaticData) -> HashSet<&RouteID> {
 fn collect_endpoint_routes(system: &ResolvedSystemConfig) -> HashSet<&RouteID> {
     HashSet::from_iter(
         system
-            .gtfs_rt_endpoints
+            .get_gtfs_rt_endpoints()
             .iter()
             // Filter Map is okay because we validate that each endpoint has Some(Routes) at config parsing
             .filter_map(|endpoint| endpoint.routes.as_ref())
