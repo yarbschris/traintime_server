@@ -1,6 +1,7 @@
 use crate::{
     error::{StationResolveError, SystemConfigError},
     types::{
+        generation::Generation,
         gtfs::{RouteID, StationName, StopID},
         static_data::StaticData,
     },
@@ -143,6 +144,9 @@ pub struct ResolvedStation {
     pub routes: Vec<RouteID>,
     pub stop_ids: Vec<StopID>,
     pub relevant_endpoints: Vec<String>,
+    // The generation of the `StaticData` this station was resolved against. If it differs from
+    // the current static data's generation, the static data was rebuilt since this resolve
+    pub generation: Generation,
 }
 
 // Spawned Task: Watch for change in selected_station, resolve system and station.
@@ -270,6 +274,7 @@ fn resolve_station(
         routes,
         stop_ids,
         relevant_endpoints,
+        generation: static_data.generation, // Derive generation from StaticData
     })
 }
 

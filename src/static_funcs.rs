@@ -1,4 +1,3 @@
-use crate::types::static_data;
 use log::{debug, error, info, warn};
 use reqwest::{Response, header::HeaderValue};
 use std::collections::HashSet;
@@ -7,7 +6,7 @@ use tokio::sync::watch;
 
 use crate::config::ResolvedSystemConfig;
 use crate::error::GtfsStaticError;
-use crate::types::{gtfs::RouteID, static_data::StaticData};
+use crate::types::{generation::Generation, gtfs::RouteID, static_data::StaticData};
 
 pub fn setup_gtfs_static(
     tx_static_data: watch::Sender<Option<StaticData>>,
@@ -26,7 +25,9 @@ async fn fetch_static_handler(
     let mut gtfs_static_fetch_interval = tokio::time::interval(Duration::from_hours(1));
     // To compare with fetched data etag to avoid uneccessary updates
     let mut last_etag: Option<HeaderValue> = None;
-
+    // Generation: Bumped when static data is successfully built and sent
+    // to ensure ResolvedStation is built off the current static data
+    let mut generation = Generation(0);
     let http_client = reqwest::Client::new();
 
     loop {
@@ -43,15 +44,21 @@ async fn fetch_static_handler(
             },
         }
 
-        if let Err(e) = refresh_static_data(
+        match refresh_static_data(
             &http_client,
             &rx_resolved_system_config,
             &tx_static_data,
             &mut last_etag,
+            generation,
         )
         .await
         {
-            error!("Error refreshing static data, will retry on regular interval: {e}");
+            // Bump generation on successful send
+            Ok(StaticDataRefreshStatus::Sent) => generation = generation.bump(),
+            Err(e) => {
+                error!("Error refreshing static data, will retry on regular interval: {e}");
+            }
+            Ok(StaticDataRefreshStatus::Skipped | StaticDataRefreshStatus::Cleared) => {}
         }
     }
 }
@@ -62,7 +69,8 @@ async fn refresh_static_data(
     rx_resolved_system_config: &watch::Receiver<Option<ResolvedSystemConfig>>,
     tx_static_data: &watch::Sender<Option<StaticData>>,
     last_etag: &mut Option<HeaderValue>,
-) -> Result<(), GtfsStaticError> {
+    generation: Generation,
+) -> Result<StaticDataRefreshStatus, GtfsStaticError> {
     // We clone the system config out of the watch channel to avoid holding the watch lock over .await calls
     let resolved_system_config_option = { rx_resolved_system_config.borrow().as_ref().cloned() };
 
@@ -72,13 +80,14 @@ async fn refresh_static_data(
         let new_etag = response.headers().get("etag").cloned();
         if should_skip_update(last_etag, &new_etag) {
             info!("No new static data found, skipping update...");
-            return Ok(());
+            return Ok(StaticDataRefreshStatus::Skipped);
         }
 
         info!("Building retained static data structure...");
-        let static_data = static_data::StaticData::build_from_bytes(
+        let static_data = StaticData::build_from_bytes(
             response.bytes().await?,
             *resolved_system_config.supported_system(),
+            generation,
         )?;
 
         // System could have been changed during the build. Make sure that we built for the correct
@@ -90,7 +99,7 @@ async fn refresh_static_data(
         if !is_current {
             warn!("System changed during static data build, cannot send new static data");
             clear_static_data(tx_static_data);
-            return Ok(());
+            return Ok(StaticDataRefreshStatus::Cleared);
         }
 
         warn_unaccounted_for_routes(&static_data, &resolved_system_config);
@@ -98,12 +107,18 @@ async fn refresh_static_data(
         info!("Sending retained static data structure...");
         tx_static_data.send_replace(Some(static_data));
         *last_etag = new_etag;
-        Ok(())
+        Ok(StaticDataRefreshStatus::Sent)
     } else {
         debug!("No system config loaded, clearing static data");
         clear_static_data(tx_static_data);
-        Ok(())
+        Ok(StaticDataRefreshStatus::Cleared)
     }
+}
+
+enum StaticDataRefreshStatus {
+    Sent,
+    Cleared,
+    Skipped,
 }
 
 // Set static_data to `None`, waking receivers only if it was `Some`

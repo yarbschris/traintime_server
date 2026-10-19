@@ -3,6 +3,7 @@ use reqwest::header::HeaderValue;
 use server::config::{SupportedTransitSystem, get_stop_ids_by_station_name};
 use server::error::{GtfsStaticError, StationResolveError};
 use server::static_funcs::should_skip_update;
+use server::types::generation::Generation;
 use server::types::gtfs::{StationName, StopID};
 use server::types::static_data::StaticData;
 
@@ -14,6 +15,7 @@ fn build_fixture() -> StaticData {
     StaticData::build_from_bytes(
         Bytes::from_static(GTFS_STATIC_ZIP),
         SupportedTransitSystem::NycSubway,
+        Generation(0),
     )
     .expect("fixture zip should build")
 }
@@ -164,6 +166,7 @@ fn build_from_bytes_rejects_bytes_that_are_not_a_zip() {
     let result = StaticData::build_from_bytes(
         Bytes::from_static(b"not a zip"),
         SupportedTransitSystem::NycSubway,
+        Generation(0),
     );
 
     assert!(matches!(result, Err(GtfsStaticError::Zip(_))));

@@ -2,7 +2,10 @@ use crate::config::SupportedTransitSystem;
 use crate::gtfs;
 use crate::{
     error::GtfsStaticError,
-    types::gtfs::{RouteID, StationName, Stop, StopID, Transfer, Trip, TripID},
+    types::{
+        generation::Generation,
+        gtfs::{RouteID, StationName, Stop, StopID, Transfer, Trip, TripID},
+    },
 };
 use itertools::Itertools;
 use log::{error, info, warn};
@@ -39,20 +42,24 @@ pub struct StaticData {
     pub built_from_system: SupportedTransitSystem,
     pub stop_lookup: HashMap<gtfs::StopID, gtfs::StationName>, // stop_id -> stop_name
     pub route_lookup: HashMap<gtfs::StationName, Vec<gtfs::RouteID>>, // station_name -> route_id
+    pub generation: Generation, // Used to ensure StaticData and ResolvedStation are synced
 }
 
 impl StaticData {
+    /// FOR TEST USE ONLY
     pub fn empty(built_from_system: SupportedTransitSystem) -> Self {
         StaticData {
             built_from_system,
             stop_lookup: HashMap::new(),
             route_lookup: HashMap::new(),
+            generation: Generation(0),
         }
     }
 
     pub fn build_from_bytes(
         bytes: Bytes,
         built_from_system: SupportedTransitSystem,
+        generation: Generation,
     ) -> Result<Self, GtfsStaticError> {
         let mut zip_reader = zip::ZipArchive::new(std::io::Cursor::new(bytes))?;
         let mut rdr = csv::Reader::from_reader(zip_reader.by_name("stops.txt")?);
@@ -117,23 +124,12 @@ impl StaticData {
             }
         }
 
-        Ok(StaticData::build_from_station_group_and_child_group_map(
-            station_groups,
-            child_station_group_lookup,
-            built_from_system,
-        ))
-    }
-
-    fn build_from_station_group_and_child_group_map(
-        station_groups: Vec<StationGroup>,
-        child_station_group_lookup: HashMap<StopID, usize>,
-        built_from_system: SupportedTransitSystem,
-    ) -> Self {
-        StaticData {
+        Ok(StaticData {
             route_lookup: build_route_lookup(&station_groups),
             stop_lookup: build_stop_lookup(station_groups, child_station_group_lookup),
             built_from_system,
-        }
+            generation,
+        })
     }
 }
 

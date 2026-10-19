@@ -48,15 +48,19 @@ async fn gtfs_rt_handler(
             continue;
         }
 
-        let (relevant_stop_ids, relevant_endpoints) = {
-            let Some(rx) = rx_resolved_station.borrow().clone() else {
+        let (relevant_stop_ids, relevant_endpoints, resolved_station_generation) = {
+            let Some(resolved_station) = rx_resolved_station.borrow().clone() else {
                 debug!(
                     "No resolved station, retrying on regular {}s interval or station selection change",
                     fetch_interval_seconds
                 );
                 continue;
             };
-            (rx.stop_ids, rx.relevant_endpoints)
+            (
+                resolved_station.stop_ids,
+                resolved_station.relevant_endpoints,
+                resolved_station.generation,
+            )
         };
         // Because we have to move into filter_map closure later
         let relevant_stop_ids = &relevant_stop_ids;
@@ -65,9 +69,16 @@ async fn gtfs_rt_handler(
         let packets = {
             let static_data_ref = rx_static_data.borrow();
             let Some(static_data) = static_data_ref.as_ref() else {
-                debug!("Static Data cleared during realtime fetch, skipping tick");
+                debug!("Static Data cleared during realtime fetch, skipping tick...");
                 continue;
             };
+            if static_data.generation != resolved_station_generation {
+                debug!(
+                    "Resolved against {:?}, static data is {:?}, skipping tick...",
+                    resolved_station_generation, static_data.generation
+                );
+                continue;
+            }
             feed_messages
                 .iter()
                 .flat_map(|message| {
