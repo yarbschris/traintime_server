@@ -420,6 +420,21 @@ mod tests {
     }
 
     #[test]
+    fn resolve_station_copies_the_generation_of_the_static_data_it_used() {
+        let mut static_data = delancey_static_data();
+        static_data.generation = Generation(7);
+
+        let resolved = resolve_station(
+            &StationName::from("Delancey St"),
+            &static_data,
+            &two_feed_system(),
+        )
+        .unwrap();
+
+        assert_eq!(resolved.generation, Generation(7));
+    }
+
+    #[test]
     fn resolve_station_fails_for_an_unknown_station() {
         let result = resolve_station(
             &StationName::from("Not A Station"),
