@@ -9,7 +9,7 @@ pub mod rt_funcs;
 pub mod static_funcs;
 pub mod types;
 
-use crate::config::SelectedStation;
+use crate::config::Selection;
 use crate::types::{gtfs, traintime_packet::TraintimePacket};
 use log::info;
 use tokio::sync::{mpsc, watch};
@@ -18,16 +18,16 @@ use tokio::sync::{mpsc, watch};
 /// that decoded packets arrive on. Spawns background tasks onto the current
 /// tokio runtime; the caller decides what to do with the packets.
 pub async fn start(
-    fallback_station: SelectedStation,
+    selection: Option<Selection>,
 ) -> (
     mpsc::Receiver<Vec<TraintimePacket>>,
-    watch::Sender<SelectedStation>,
+    watch::Sender<Option<Selection>>,
 ) {
     info!("Starting Server");
 
     let (tx_static_data, rx_static_data) = watch::channel(None);
     let (resolver_channels, _resolve_task_join_handle) =
-        config::setup_config(fallback_station, rx_static_data.clone());
+        config::setup_config(selection, rx_static_data.clone());
 
     // MPSC for Traintime Packets
     let (tx_traintime_packets, rx_traintime_packets) = mpsc::channel(2);
@@ -43,5 +43,5 @@ pub async fn start(
         tx_traintime_packets,
     );
 
-    (rx_traintime_packets, resolver_channels.tx_selected_station)
+    (rx_traintime_packets, resolver_channels.tx_selection)
 }

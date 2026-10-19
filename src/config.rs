@@ -14,18 +14,18 @@ const BOSTON_TRANSIT_CONFIG: &str = include_str!("../system_configs/boston_trans
 const MTA_METRO_NORTH_CONFIG: &str = include_str!("../system_configs/mta_metro_north.yml");
 
 pub struct ResolverChannels {
-    pub tx_selected_station: watch::Sender<SelectedStation>,
+    pub tx_selection: watch::Sender<Option<Selection>>,
     pub rx_resolved_system_config: watch::Receiver<Option<ResolvedSystemConfig>>,
     pub rx_resolved_station: watch::Receiver<Option<ResolvedStation>>,
 }
 
 // Create watch channels for configurations, spawn resolve station task
 pub fn setup_config(
-    fallback_selection: SelectedStation,
+    initial_selection: Option<Selection>,
     rx_static_data: watch::Receiver<Option<StaticData>>,
 ) -> (ResolverChannels, JoinHandle<()>) {
     // Watch channel for station config
-    let (tx_selected_station, rx_selected_station) = watch::channel(fallback_selection);
+    let (tx_selection, rx_selection) = watch::channel(initial_selection);
 
     // Watch channel for transit system configuration.
     let (tx_resolved_system_config, rx_resolved_system_config) = watch::channel(None);
@@ -33,14 +33,14 @@ pub fn setup_config(
     let (tx_resolved_station, rx_resolved_station) = watch::channel(None);
 
     let resolve_task_join_handle = tokio::spawn(resolve_station_on_selection_change(
-        rx_selected_station,
+        rx_selection,
         rx_static_data,
         tx_resolved_system_config.clone(),
         tx_resolved_station,
     ));
 
     let resolver_channels = ResolverChannels {
-        tx_selected_station,
+        tx_selection,
         rx_resolved_system_config,
         rx_resolved_station,
     };
@@ -124,16 +124,16 @@ fn bundled_config_yaml(system: &SupportedTransitSystem) -> &'static str {
 }
 
 #[derive(Debug)]
-pub struct SelectedStation {
+pub struct Selection {
     pub transit_system: SupportedTransitSystem,
-    pub station_name: StationName,
+    pub station_name: Option<StationName>,
 }
 
-impl SelectedStation {
+impl Selection {
     pub fn new(transit_system: SupportedTransitSystem) -> Self {
-        SelectedStation {
+        Selection {
             transit_system,
-            station_name: StationName::new(),
+            station_name: None,
         }
     }
 }
@@ -147,25 +147,32 @@ pub struct ResolvedStation {
 
 // Spawned Task: Watch for change in selected_station, resolve system and station.
 async fn resolve_station_on_selection_change(
-    mut rx_selected_station: watch::Receiver<SelectedStation>,
+    mut rx_selection: watch::Receiver<Option<Selection>>,
     mut rx_static_data: watch::Receiver<Option<StaticData>>,
     tx_resolved_system_config: watch::Sender<Option<ResolvedSystemConfig>>,
     tx_resolved_station: watch::Sender<Option<ResolvedStation>>,
 ) {
     // On startup right now, we set an initial value, we want to resolve immediately so that
     // static refresh task and resolve task do not hang waiting for each other
-    rx_selected_station.mark_changed();
+    rx_selection.mark_changed();
 
     loop {
         tokio::select! {
-            r = rx_selected_station.changed() => if r.is_err() { break },
+            r = rx_selection.changed() => if r.is_err() { break },
             r = rx_static_data.changed() => if r.is_err() { break },
         }
 
-        let selected_station = rx_selected_station.borrow_and_update();
-
-        if resolve_needs_system_config_refresh(&selected_station, &tx_resolved_system_config) {
-            match resolve_system(&selected_station) {
+        let selection_option = rx_selection.borrow_and_update();
+        let Some(selection) = selection_option.as_ref() else {
+            debug!("No selection");
+            // Clear both resolved channels for consistency, only notify receivers if channel held
+            // `Some`
+            tx_resolved_system_config.send_if_modified(|c| c.take().is_some());
+            tx_resolved_station.send_if_modified(|c| c.take().is_some());
+            continue;
+        };
+        if resolve_needs_system_config_refresh(selection, &tx_resolved_system_config) {
+            match resolve_system(selection) {
                 Ok(resolved_system_config) => {
                     tx_resolved_system_config.send_replace(Some(resolved_system_config));
                 }
@@ -176,11 +183,7 @@ async fn resolve_station_on_selection_change(
             }
         }
 
-        let resolved = try_resolve_station(
-            &rx_static_data,
-            &tx_resolved_system_config,
-            &selected_station,
-        );
+        let resolved = try_resolve_station(&rx_static_data, &tx_resolved_system_config, selection);
         tx_resolved_station.send_if_modified(|current| {
             if current.is_none() && resolved.is_none() {
                 false
@@ -195,14 +198,14 @@ async fn resolve_station_on_selection_change(
 // We must update the resolved system config during refresh if the resolved system config watch
 // channel currently holds None or the resolved system config's system is different from user selection
 fn resolve_needs_system_config_refresh(
-    selected_station: &SelectedStation,
+    selection: &Selection,
     tx_resolved_system_config: &watch::Sender<Option<ResolvedSystemConfig>>,
 ) -> bool {
     tx_resolved_system_config
         .borrow()
         .as_ref()
         .is_none_or(|resolved_system_config| {
-            resolved_system_config.supported_system != selected_station.transit_system
+            resolved_system_config.supported_system != selection.transit_system
         })
 }
 
@@ -210,8 +213,12 @@ fn resolve_needs_system_config_refresh(
 fn try_resolve_station(
     rx_static_data: &watch::Receiver<Option<StaticData>>,
     tx_resolved_system_config: &watch::Sender<Option<ResolvedSystemConfig>>,
-    selected_station: &SelectedStation,
+    selection: &Selection,
 ) -> Option<ResolvedStation> {
+    let Some(station_name) = selection.station_name.as_ref() else {
+        debug!("Cannot resolve station: no station selected");
+        return None;
+    };
     let static_data_ref = rx_static_data.borrow();
     let Some(static_data) = static_data_ref.as_ref() else {
         debug!("Cannot resolve station: no static data loaded");
@@ -227,7 +234,7 @@ fn try_resolve_station(
         return None;
     }
 
-    match resolve_station(selected_station, static_data, resolved_system_config) {
+    match resolve_station(station_name, static_data, resolved_system_config) {
         Ok(new_resolved_station) => Some(new_resolved_station),
         Err(e) => {
             warn!("{e}");
@@ -236,18 +243,18 @@ fn try_resolve_station(
     }
 }
 
-fn resolve_system(sel: &SelectedStation) -> Result<ResolvedSystemConfig, SystemConfigError> {
+fn resolve_system(sel: &Selection) -> Result<ResolvedSystemConfig, SystemConfigError> {
     ResolvedSystemConfig::from_system(&sel.transit_system)
 }
 
 // Resolve the user's selected station into the data we actually need at runtime
 fn resolve_station(
-    sel: &SelectedStation,
+    station_name: &StationName,
     static_data: &StaticData,
     system: &ResolvedSystemConfig,
 ) -> Result<ResolvedStation, StationResolveError> {
-    let routes = get_relevant_routes(&sel.station_name, static_data)?;
-    let stop_ids = get_stop_ids_by_station_name(&sel.station_name, static_data)?;
+    let routes = get_relevant_routes(station_name, static_data)?;
+    let stop_ids = get_stop_ids_by_station_name(station_name, static_data)?;
     let relevant_endpoints: Vec<String> = system
         .gtfs_rt_endpoints
         .iter()
@@ -383,17 +390,17 @@ mod tests {
         static_data
     }
 
-    fn selection(station_name: &str) -> SelectedStation {
-        SelectedStation {
+    fn selection(station_name: &str) -> Selection {
+        Selection {
             transit_system: SupportedTransitSystem::NycSubway,
-            station_name: StationName::from(station_name),
+            station_name: Some(StationName::from(station_name)),
         }
     }
 
     #[test]
     fn resolve_station_keeps_only_endpoints_carrying_the_station_routes() {
         let resolved = resolve_station(
-            &selection("Delancey St"),
+            &StationName::from("Delancey St"),
             &delancey_static_data(),
             &two_feed_system(),
         )
@@ -410,7 +417,7 @@ mod tests {
     #[test]
     fn resolve_station_fails_for_an_unknown_station() {
         let result = resolve_station(
-            &selection("Not A Station"),
+            &StationName::from("Not A Station"),
             &delancey_static_data(),
             &two_feed_system(),
         );
@@ -446,6 +453,22 @@ mod tests {
         );
 
         assert!(resolved.is_some());
+    }
+
+    #[test]
+    fn try_resolve_station_waits_for_a_station_when_only_a_system_is_selected() {
+        // A system without a station is a normal state (the CLI selects one to load the station
+        // list), so it resolves to None even when everything else is ready
+        let (rx_static_data, tx_system_config) =
+            resolver_inputs(Some(delancey_static_data()), Some(two_feed_system()));
+
+        let resolved = try_resolve_station(
+            &rx_static_data,
+            &tx_system_config,
+            &Selection::new(SupportedTransitSystem::NycSubway),
+        );
+
+        assert!(resolved.is_none());
     }
 
     #[test]

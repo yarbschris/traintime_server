@@ -1,5 +1,5 @@
 use server::{
-    config::{SelectedStation, SupportedTransitSystem},
+    config::{Selection, SupportedTransitSystem},
     types::gtfs::StationName,
 };
 
@@ -9,11 +9,12 @@ async fn main() {
 
     let station_name = StationName::from("Katonah");
     let transit_system = SupportedTransitSystem::MtaMetroNorth;
-    let fallback_system = SelectedStation {
-        station_name,
+    let (mut rx_traintime_packets, tx_selection) = server::start(None).await;
+
+    tx_selection.send_replace(Some(Selection {
+        station_name: Some(station_name),
         transit_system,
-    };
-    let (mut rx_traintime_packets, _tx_selected_station) = server::start(fallback_system).await;
+    }));
 
     while let Some(mut packets) = rx_traintime_packets.recv().await {
         packets.sort_by_key(|a| a.mins_until_arrival);

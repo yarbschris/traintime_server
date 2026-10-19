@@ -10,18 +10,8 @@ pub struct Stop {
 #[derive(Debug, Clone, serde::Deserialize, Hash, PartialEq, std::cmp::Eq)]
 pub struct StationName(pub String);
 impl StationName {
-    pub fn new() -> Self {
-        StationName(String::new())
-    }
-
     pub fn from(name: &str) -> Self {
         StationName(String::from(name))
-    }
-}
-
-impl Default for StationName {
-    fn default() -> Self {
-        StationName::new()
     }
 }
 
