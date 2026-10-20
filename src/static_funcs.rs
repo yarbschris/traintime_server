@@ -11,16 +11,19 @@ use crate::types::{generation::Generation, gtfs::RouteID, static_data::StaticDat
 pub fn setup_gtfs_static(
     tx_static_data: watch::Sender<Option<StaticData>>,
     rx_resolved_system_config: watch::Receiver<Option<ResolvedSystemConfig>>,
+    http_client: reqwest::Client,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(fetch_static_handler(
         tx_static_data,
         rx_resolved_system_config,
+        http_client,
     ))
 }
 
 async fn fetch_static_handler(
     tx_static_data: watch::Sender<Option<StaticData>>,
     mut rx_resolved_system_config: watch::Receiver<Option<ResolvedSystemConfig>>,
+    http_client: reqwest::Client,
 ) {
     let mut gtfs_static_fetch_interval = tokio::time::interval(Duration::from_hours(1));
     // To compare with fetched data etag to avoid uneccessary updates
@@ -28,7 +31,6 @@ async fn fetch_static_handler(
     // Generation: Bumped when static data is successfully built and sent
     // to ensure ResolvedStation is built off the current static data
     let mut generation = Generation(0);
-    let http_client = reqwest::Client::new();
 
     loop {
         tokio::select! {
@@ -41,6 +43,8 @@ async fn fetch_static_handler(
                 last_etag = None;
                 // Also clear static data for old system
                 clear_static_data(&tx_static_data);
+                // We fetch now, so push next scheduled fetch back
+                gtfs_static_fetch_interval.reset();
             },
         }
 
@@ -56,7 +60,12 @@ async fn fetch_static_handler(
             // Bump generation on successful send
             Ok(StaticDataRefreshStatus::Sent) => generation = generation.bump(),
             Err(e) => {
-                error!("Error refreshing static data, will retry on regular interval: {e}");
+                error!("Error refreshing static data: {e}");
+                // Fetch errors are transient, so retry sooner, parse errors won't fix themselves
+                // until new feed is published
+                if matches!(e, GtfsStaticError::Fetch(_)) {
+                    gtfs_static_fetch_interval.reset_after(Duration::from_secs(30));
+                }
             }
             Ok(StaticDataRefreshStatus::Skipped | StaticDataRefreshStatus::Cleared) => {}
         }
@@ -146,6 +155,8 @@ async fn fetch_gtfs_static_data(
 
     let response = http_client
         .get(gtfs_static_endpoint)
+        // Timeout of 300 secs for static_data since it is a large file and we are running this on a Pi
+        .timeout(Duration::from_secs(300))
         .send()
         .await?
         .error_for_status()?;

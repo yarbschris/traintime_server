@@ -9,7 +9,7 @@ async fn main() {
 
     let station_name = StationName::from("Katonah");
     let transit_system = SupportedTransitSystem::MtaMetroNorth;
-    let (mut rx_traintime_packets, tx_selection) = server::start(None).await;
+    let (mut rx_traintime_packets, tx_selection) = server::start(None).await.unwrap();
 
     tx_selection.send_replace(Some(Selection {
         station_name: Some(station_name),

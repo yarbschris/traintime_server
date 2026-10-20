@@ -9,7 +9,10 @@ pub mod rt_funcs;
 pub mod static_funcs;
 pub mod types;
 
+use std::time::Duration;
+
 use crate::config::Selection;
+use crate::error::StartError;
 use crate::types::{gtfs, traintime_packet::TraintimePacket};
 use log::info;
 use tokio::sync::{mpsc, watch};
@@ -19,10 +22,13 @@ use tokio::sync::{mpsc, watch};
 /// tokio runtime; the caller decides what to do with the packets.
 pub async fn start(
     selection: Option<Selection>,
-) -> (
-    mpsc::Receiver<Vec<TraintimePacket>>,
-    watch::Sender<Option<Selection>>,
-) {
+) -> Result<
+    (
+        mpsc::Receiver<Vec<TraintimePacket>>,
+        watch::Sender<Option<Selection>>,
+    ),
+    StartError,
+> {
     info!("Starting Server");
 
     let (tx_static_data, rx_static_data) = watch::channel(None);
@@ -32,16 +38,22 @@ pub async fn start(
     // MPSC for Traintime Packets
     let (tx_traintime_packets, rx_traintime_packets) = mpsc::channel(2);
 
+    let http_client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(15))
+        .build()?;
+
     let _static_join_handle = static_funcs::setup_gtfs_static(
         tx_static_data,
         resolver_channels.rx_resolved_system_config.clone(),
+        http_client.clone(),
     );
 
     let _rt_join_handle = rt_funcs::setup_gtfs_rt(
         resolver_channels.rx_resolved_station,
         rx_static_data,
         tx_traintime_packets,
+        http_client,
     );
 
-    (rx_traintime_packets, resolver_channels.tx_selection)
+    Ok((rx_traintime_packets, resolver_channels.tx_selection))
 }

@@ -1,6 +1,27 @@
 use crate::types::gtfs::{RouteID, StationName};
 
 #[derive(Debug)]
+pub enum StartError {
+    Client(reqwest::Error),
+}
+
+impl std::fmt::Display for StartError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StartError::Client(e) => write!(f, "error initializing http client: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for StartError {}
+
+impl From<reqwest::Error> for StartError {
+    fn from(e: reqwest::Error) -> Self {
+        StartError::Client(e)
+    }
+}
+
+#[derive(Debug)]
 pub enum SystemConfigError {
     Parse(serde_norway::Error),
     NoRealtimeEndpoints,
