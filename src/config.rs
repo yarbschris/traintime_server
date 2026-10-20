@@ -63,14 +63,14 @@ pub struct ResolvedSystemConfig {
 }
 
 impl ResolvedSystemConfig {
-    pub fn from_system(system: &SupportedTransitSystem) -> Result<Self, SystemConfigError> {
+    pub fn from_system(system: SupportedTransitSystem) -> Result<Self, SystemConfigError> {
         Self::from_yaml(system, bundled_config_yaml(system))
     }
 
-    fn from_yaml(system: &SupportedTransitSystem, yaml: &str) -> Result<Self, SystemConfigError> {
+    fn from_yaml(system: SupportedTransitSystem, yaml: &str) -> Result<Self, SystemConfigError> {
         let raw = RawSystemConfig::parse_config(yaml)?;
         ResolvedSystemConfig {
-            supported_system: *system,
+            supported_system: system,
             gtfs_static_endpoint: raw.gtfs_static_endpoint,
             gtfs_rt_endpoints: raw.gtfs_rt_endpoints,
         }
@@ -91,8 +91,8 @@ impl ResolvedSystemConfig {
         Ok(self)
     }
 
-    pub fn supported_system(&self) -> &SupportedTransitSystem {
-        &self.supported_system
+    pub fn supported_system(&self) -> SupportedTransitSystem {
+        self.supported_system
     }
 
     pub fn gtfs_static_endpoint(&self) -> &str {
@@ -116,7 +116,7 @@ impl RawSystemConfig {
     }
 }
 
-fn bundled_config_yaml(system: &SupportedTransitSystem) -> &'static str {
+fn bundled_config_yaml(system: SupportedTransitSystem) -> &'static str {
     match system {
         SupportedTransitSystem::NycSubway => NYC_SUBWAY_CONFIG,
         SupportedTransitSystem::BostonTransit => BOSTON_TRANSIT_CONFIG,
@@ -248,7 +248,7 @@ fn try_resolve_station(
 }
 
 fn resolve_system(sel: &Selection) -> Result<ResolvedSystemConfig, SystemConfigError> {
-    ResolvedSystemConfig::from_system(&sel.transit_system)
+    ResolvedSystemConfig::from_system(sel.transit_system)
 }
 
 // Resolve the user's selected station into the data we actually need at runtime
@@ -377,7 +377,7 @@ mod tests {
                     gtfs_rt_endpoints:\n  \
                     - url: https://example.com/ace\n    routes: [\"A\", \"C\", \"E\"]\n  \
                     - url: https://example.com/bdfm\n    routes: [\"B\", \"D\", \"F\", \"M\"]\n";
-        ResolvedSystemConfig::from_yaml(&SupportedTransitSystem::NycSubway, yaml).unwrap()
+        ResolvedSystemConfig::from_yaml(SupportedTransitSystem::NycSubway, yaml).unwrap()
     }
 
     // One station, Delancey St, served by F and M from two platforms
@@ -544,7 +544,7 @@ mod tests {
             SupportedTransitSystem::BostonTransit,
             SupportedTransitSystem::MtaMetroNorth,
         ] {
-            let config = ResolvedSystemConfig::from_system(&system).unwrap();
+            let config = ResolvedSystemConfig::from_system(system).unwrap();
 
             assert!(!config.gtfs_static_endpoint.is_empty());
             assert!(!config.gtfs_rt_endpoints.is_empty());
@@ -558,7 +558,7 @@ mod tests {
                     gtfs_rt_endpoints:\n  - url: https://example.com/rt\n";
 
         let config =
-            ResolvedSystemConfig::from_yaml(&SupportedTransitSystem::NycSubway, yaml).unwrap();
+            ResolvedSystemConfig::from_yaml(SupportedTransitSystem::NycSubway, yaml).unwrap();
 
         assert_eq!(config.gtfs_rt_endpoints.len(), 1);
         assert_eq!(config.gtfs_rt_endpoints[0].url, "https://example.com/rt");
@@ -574,7 +574,7 @@ mod tests {
                     - url: https://example.com/ace\n    routes: [\"A\", \"C\", \"E\"]\n  \
                     - url: https://example.com/bdfm\n";
 
-        let result = ResolvedSystemConfig::from_yaml(&SupportedTransitSystem::NycSubway, yaml);
+        let result = ResolvedSystemConfig::from_yaml(SupportedTransitSystem::NycSubway, yaml);
 
         assert!(matches!(
             result,
@@ -601,7 +601,7 @@ mod tests {
                     gtfs_rt_endpoints:\n  - url: https://example.com/rt\n    routes: [\"A\", \"6X\"]\n";
 
         let config =
-            ResolvedSystemConfig::from_yaml(&SupportedTransitSystem::NycSubway, yaml).unwrap();
+            ResolvedSystemConfig::from_yaml(SupportedTransitSystem::NycSubway, yaml).unwrap();
 
         assert_eq!(
             config.gtfs_rt_endpoints[0].routes,
@@ -614,7 +614,7 @@ mod tests {
         let yaml = "gtfs_static_endpoint: https://example.com/static.zip\n\
                     gtfs_rt_endpoints: []\n";
 
-        let result = ResolvedSystemConfig::from_yaml(&SupportedTransitSystem::NycSubway, yaml);
+        let result = ResolvedSystemConfig::from_yaml(SupportedTransitSystem::NycSubway, yaml);
 
         assert!(matches!(
             result,
@@ -627,7 +627,7 @@ mod tests {
         // A missing key is malformed YAML for this struct, not an empty list
         let yaml = "gtfs_static_endpoint: https://example.com/static.zip\n";
 
-        let result = ResolvedSystemConfig::from_yaml(&SupportedTransitSystem::NycSubway, yaml);
+        let result = ResolvedSystemConfig::from_yaml(SupportedTransitSystem::NycSubway, yaml);
 
         assert!(matches!(result, Err(SystemConfigError::Parse(_))));
     }

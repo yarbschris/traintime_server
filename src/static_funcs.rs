@@ -86,7 +86,7 @@ async fn refresh_static_data(
         info!("Building retained static data structure...");
         let static_data = StaticData::build_from_bytes(
             response.bytes().await?,
-            *resolved_system_config.supported_system(),
+            resolved_system_config.supported_system(),
             generation,
         )?;
 
@@ -95,7 +95,7 @@ async fn refresh_static_data(
         let is_current = rx_resolved_system_config
             .borrow()
             .as_ref()
-            .is_some_and(|c| c.supported_system() == &static_data.built_from_system);
+            .is_some_and(|c| c.supported_system() == static_data.built_from_system);
         if !is_current {
             warn!("System changed during static data build, cannot send new static data");
             clear_static_data(tx_static_data);

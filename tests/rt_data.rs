@@ -202,7 +202,7 @@ fn decode_rejects_bytes_that_are_not_a_feed() {
 #[test]
 fn nyc_config_lists_the_routes_the_fixture_carries() {
     let message = decode_fixture();
-    let config = ResolvedSystemConfig::from_system(&SupportedTransitSystem::NycSubway)
+    let config = ResolvedSystemConfig::from_system(SupportedTransitSystem::NycSubway)
         .expect("bundled NYC config should load");
     let endpoint = config
         .gtfs_rt_endpoints()
