@@ -4,6 +4,7 @@ use crate::{
         generation::Generation,
         gtfs::{RouteID, StationName, StopID},
         static_data::StaticData,
+        status::{ServerStatus, update_server_status},
     },
 };
 use log::{debug, warn};
@@ -24,6 +25,7 @@ pub struct ResolverChannels {
 pub fn setup_config(
     initial_selection: Option<Selection>,
     rx_static_data: watch::Receiver<Option<StaticData>>,
+    tx_server_status: watch::Sender<ServerStatus>,
 ) -> (ResolverChannels, JoinHandle<()>) {
     // Watch channel for station config
     let (tx_selection, rx_selection) = watch::channel(initial_selection);
@@ -38,6 +40,7 @@ pub fn setup_config(
         rx_static_data,
         tx_resolved_system_config.clone(),
         tx_resolved_station,
+        tx_server_status,
     ));
 
     let resolver_channels = ResolverChannels {
@@ -155,6 +158,7 @@ async fn resolve_station_on_selection_change(
     mut rx_static_data: watch::Receiver<Option<StaticData>>,
     tx_resolved_system_config: watch::Sender<Option<ResolvedSystemConfig>>,
     tx_resolved_station: watch::Sender<Option<ResolvedStation>>,
+    tx_server_status: watch::Sender<ServerStatus>,
 ) {
     // On startup right now, we set an initial value, we want to resolve immediately so that
     // static refresh task and resolve task do not hang waiting for each other
@@ -173,6 +177,7 @@ async fn resolve_station_on_selection_change(
             // `Some`
             tx_resolved_system_config.send_if_modified(|c| c.take().is_some());
             tx_resolved_station.send_if_modified(|c| c.take().is_some());
+            update_server_status(&tx_server_status, ServerStatus::NoSelection);
             continue;
         };
         if resolve_needs_system_config_refresh(selection, &tx_resolved_system_config) {
@@ -187,15 +192,15 @@ async fn resolve_station_on_selection_change(
             }
         }
 
-        let resolved = try_resolve_station(&rx_static_data, &tx_resolved_system_config, selection);
-        tx_resolved_station.send_if_modified(|current| {
-            if current.is_none() && resolved.is_none() {
-                false
-            } else {
-                *current = resolved;
-                true
+        match try_resolve_station(&rx_static_data, &tx_resolved_system_config, selection) {
+            Ok(resolved_station) => {
+                tx_resolved_station.send_replace(Some(resolved_station));
             }
-        });
+            Err(status) => {
+                update_server_status(&tx_server_status, status);
+                tx_resolved_station.send_if_modified(|r| r.take().is_some());
+            }
+        }
     }
 }
 
@@ -213,36 +218,43 @@ fn resolve_needs_system_config_refresh(
         })
 }
 
-// Validate the necessary conditions for resolving station, return None otherwise
+// Validate the necessary conditions for resolving station, or return status
 fn try_resolve_station(
     rx_static_data: &watch::Receiver<Option<StaticData>>,
     tx_resolved_system_config: &watch::Sender<Option<ResolvedSystemConfig>>,
     selection: &Selection,
-) -> Option<ResolvedStation> {
+) -> Result<ResolvedStation, ServerStatus> {
     let Some(station_name) = selection.station_name.as_ref() else {
         debug!("Cannot resolve station: no station selected");
-        return None;
+        return Err(ServerStatus::NoStationSelected);
     };
     let static_data_ref = rx_static_data.borrow();
     let Some(static_data) = static_data_ref.as_ref() else {
         debug!("Cannot resolve station: no static data loaded");
-        return None;
+        return Err(ServerStatus::LoadingStaticData);
     };
     let resolved_system_config_ref = tx_resolved_system_config.borrow();
     let Some(resolved_system_config) = resolved_system_config_ref.as_ref() else {
         debug!("Cannot resolve station: no system config loaded");
-        return None;
+        return Err(ServerStatus::Resolving);
     };
     if static_data.built_from_system != resolved_system_config.supported_system {
         debug!("Cannot resolve station: static data is for a different system");
-        return None;
+        return Err(ServerStatus::LoadingStaticData);
     }
 
     match resolve_station(station_name, static_data, resolved_system_config) {
-        Ok(new_resolved_station) => Some(new_resolved_station),
+        Ok(new_resolved_station) => Ok(new_resolved_station),
         Err(e) => {
             warn!("{e}");
-            None
+            match e {
+                StationResolveError::UnknownStation(station_name) => {
+                    Err(ServerStatus::UnknownStation(station_name.0))
+                }
+                StationResolveError::EndpointsDoNotCoverAnyRoutes(_) => {
+                    Err(ServerStatus::NoEndpointsForStation)
+                }
+            }
         }
     }
 }
@@ -472,13 +484,13 @@ mod tests {
             &selection("Delancey St"),
         );
 
-        assert!(resolved.is_some());
+        assert!(resolved.is_ok());
     }
 
     #[test]
     fn try_resolve_station_waits_for_a_station_when_only_a_system_is_selected() {
         // A system without a station is a normal state (the CLI selects one to load the station
-        // list), so it resolves to None even when everything else is ready
+        // list), so it reports `NoStationSelected` even when everything else is ready
         let (rx_static_data, tx_system_config) =
             resolver_inputs(Some(delancey_static_data()), Some(two_feed_system()));
 
@@ -488,7 +500,7 @@ mod tests {
             &Selection::new(SupportedTransitSystem::NycSubway),
         );
 
-        assert!(resolved.is_none());
+        assert_eq!(resolved.err(), Some(ServerStatus::NoStationSelected));
     }
 
     #[test]
@@ -502,7 +514,7 @@ mod tests {
             &selection("Delancey St"),
         );
 
-        assert!(resolved.is_none());
+        assert_eq!(resolved.err(), Some(ServerStatus::LoadingStaticData));
     }
 
     #[test]
@@ -516,7 +528,7 @@ mod tests {
             &selection("Delancey St"),
         );
 
-        assert!(resolved.is_none());
+        assert_eq!(resolved.err(), Some(ServerStatus::Resolving));
     }
 
     #[test]
@@ -534,7 +546,7 @@ mod tests {
             &selection("Delancey St"),
         );
 
-        assert!(resolved.is_none());
+        assert_eq!(resolved.err(), Some(ServerStatus::LoadingStaticData));
     }
 
     #[test]

@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use crate::config::Selection;
 use crate::error::StartError;
+use crate::types::status::ServerStatus;
 use crate::types::{gtfs, traintime_packet::TraintimePacket};
 use log::info;
 use std::sync::Arc;
@@ -27,14 +28,17 @@ pub async fn start(
     (
         watch::Receiver<Arc<[TraintimePacket]>>,
         watch::Sender<Option<Selection>>,
+        watch::Receiver<ServerStatus>,
     ),
     StartError,
 > {
     info!("Starting Server");
+    // Watch for Server Status
+    let (tx_server_status, rx_server_status) = watch::channel(ServerStatus::Starting);
 
     let (tx_static_data, rx_static_data) = watch::channel(None);
     let (resolver_channels, _resolve_task_join_handle) =
-        config::setup_config(selection, rx_static_data.clone());
+        config::setup_config(selection, rx_static_data.clone(), tx_server_status.clone());
 
     // Watch for Traintime Packets, the latest tick's packets replace the previous tick's
     let (tx_traintime_packets, rx_traintime_packets) = watch::channel(Arc::default());
@@ -54,7 +58,12 @@ pub async fn start(
         rx_static_data,
         tx_traintime_packets,
         http_client,
+        tx_server_status,
     );
 
-    Ok((rx_traintime_packets, resolver_channels.tx_selection))
+    Ok((
+        rx_traintime_packets,
+        resolver_channels.tx_selection,
+        rx_server_status,
+    ))
 }

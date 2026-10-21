@@ -1,6 +1,6 @@
 use server::{
     config::{Selection, SupportedTransitSystem},
-    types::{gtfs::StationName, traintime_packet::TraintimePacket},
+    types::{gtfs::StationName, status::ServerStatus, traintime_packet::TraintimePacket},
 };
 
 #[tokio::main]
@@ -9,8 +9,10 @@ async fn main() {
 
     let station_name = StationName::from("Katonah");
     let transit_system = SupportedTransitSystem::MtaMetroNorth;
-    let (mut rx_traintime_packets, tx_selection) = server::start(None).await.unwrap();
+    let (mut rx_traintime_packets, tx_selection, rx_server_status) =
+        server::start(None).await.unwrap();
 
+    tokio::spawn(receive_status(rx_server_status));
     tx_selection.send_replace(Some(Selection {
         station_name: Some(station_name),
         transit_system,
@@ -29,5 +31,15 @@ async fn main() {
 fn draw(packets: &[TraintimePacket]) {
     for packet in packets.iter().rev() {
         println!("{}", packet);
+    }
+}
+
+async fn receive_status(mut rx_server_status: tokio::sync::watch::Receiver<ServerStatus>) {
+    println!("{}", rx_server_status.borrow().clone());
+    loop {
+        if rx_server_status.changed().await.is_err() {
+            break;
+        }
+        println!("{}", rx_server_status.borrow().clone());
     }
 }

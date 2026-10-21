@@ -1,6 +1,6 @@
 use futures::future::join_all;
 use gtfs_rt_decode::gtfs_rt_types::FeedMessage;
-use log::{debug, error, info, warn};
+use log::{debug, error, info};
 use prost::bytes::Bytes;
 use std::sync::Arc;
 use std::time::Duration;
@@ -9,6 +9,7 @@ use tokio::time;
 
 use crate::config;
 use crate::error::GtfsRtError;
+use crate::types::status::{ServerStatus, update_server_status};
 use crate::types::traintime_packet::TraintimePacket;
 use crate::types::{generation::Generation, gtfs::StopID};
 use crate::types::{static_data::StaticData, traintime_packet};
@@ -18,12 +19,14 @@ pub fn setup_gtfs_rt(
     rx_static_data: watch::Receiver<Option<StaticData>>,
     tx_traintime_packets: watch::Sender<Arc<[TraintimePacket]>>,
     http_client: reqwest::Client,
+    tx_server_status: watch::Sender<ServerStatus>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(gtfs_rt_handler(
         rx_resolved_station,
         rx_static_data,
         tx_traintime_packets,
         http_client,
+        tx_server_status,
     ))
 }
 
@@ -32,6 +35,7 @@ async fn gtfs_rt_handler(
     rx_static_data: watch::Receiver<Option<StaticData>>,
     tx_traintime_packets: watch::Sender<Arc<[TraintimePacket]>>,
     http_client: reqwest::Client,
+    tx_server_status: watch::Sender<ServerStatus>,
 ) {
     let fetch_interval_seconds = 30;
     let mut gtfs_rt_fetch_interval = time::interval(Duration::from_secs(fetch_interval_seconds));
@@ -56,7 +60,7 @@ async fn gtfs_rt_handler(
         }
 
         let (relevant_stop_ids, relevant_endpoints, resolved_station_generation) = {
-            let Some(resolved_station) = rx_resolved_station.borrow().clone() else {
+            let Some(resolved_station) = rx_resolved_station.borrow_and_update().clone() else {
                 debug!(
                     "No resolved station, retrying on regular {}s interval or station selection change",
                     fetch_interval_seconds
@@ -69,7 +73,41 @@ async fn gtfs_rt_handler(
                 resolved_station.generation,
             )
         };
-        let feed_messages = gtfs_rt_request_handler(relevant_endpoints, &http_client).await;
+
+        let fetch_results = gtfs_rt_request_handler(relevant_endpoints, &http_client).await;
+
+        // Make sure resolved station didn't change during fetch
+        match rx_resolved_station.has_changed() {
+            Ok(true) => continue,
+            Ok(false) => {}
+            Err(_) => {
+                error!("bug: resolved station channel closed");
+                break;
+            }
+        }
+
+        if fetch_results.iter().all(|x| match x {
+            Ok(_) => false,
+            Err(e) => {
+                error!("{e}");
+                true
+            }
+        }) {
+            update_server_status(&tx_server_status, ServerStatus::FetchFailed);
+        } else {
+            update_server_status(&tx_server_status, ServerStatus::Ready);
+        }
+        let feed_messages: Vec<FeedMessage> = fetch_results
+            .into_iter()
+            .filter_map(|result| match result {
+                Ok(feed_message) => Some(feed_message),
+                Err(e) => {
+                    error!("{e}");
+                    None
+                }
+            })
+            .collect();
+
         let packets = {
             let static_data_ref = rx_static_data.borrow();
             let Some(static_data) = static_data_ref.as_ref() else {
@@ -82,6 +120,7 @@ async fn gtfs_rt_handler(
                 resolved_station_generation,
                 &relevant_stop_ids,
             ) else {
+                // We get none when resolved against stale static data, new resolve already in progress
                 continue;
             };
             packets
@@ -134,24 +173,15 @@ fn packets_for_tick(
     Some(packets)
 }
 
-// For each endpoint, make a request. Put feed messages together, and return
+// For each endpoint, make a request.
 async fn gtfs_rt_request_handler(
     endpoints: Vec<String>,
     http_client: &reqwest::Client,
-) -> Vec<FeedMessage> {
+) -> Vec<Result<FeedMessage, GtfsRtError>> {
     let futures = endpoints
         .iter()
         .map(|endpoint| fetch_and_decode_gtfs_rt(endpoint, http_client));
-    join_all(futures)
-        .await
-        .into_iter()
-        .zip(&endpoints)
-        .filter_map(|(result, endpoint)| {
-            result
-                .inspect_err(|e| warn!("Skipping {endpoint}: {e}"))
-                .ok()
-        })
-        .collect()
+    join_all(futures).await
 }
 
 pub async fn fetch_and_decode_gtfs_rt(
