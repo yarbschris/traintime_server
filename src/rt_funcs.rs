@@ -2,8 +2,9 @@ use futures::future::join_all;
 use gtfs_rt_decode::gtfs_rt_types::FeedMessage;
 use log::{debug, error, info, warn};
 use prost::bytes::Bytes;
+use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::watch;
 use tokio::time;
 
 use crate::config;
@@ -15,7 +16,7 @@ use crate::types::{static_data::StaticData, traintime_packet};
 pub fn setup_gtfs_rt(
     rx_resolved_station: watch::Receiver<Option<config::ResolvedStation>>,
     rx_static_data: watch::Receiver<Option<StaticData>>,
-    tx_traintime_packets: mpsc::Sender<Vec<traintime_packet::TraintimePacket>>,
+    tx_traintime_packets: watch::Sender<Arc<[TraintimePacket]>>,
     http_client: reqwest::Client,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(gtfs_rt_handler(
@@ -29,7 +30,7 @@ pub fn setup_gtfs_rt(
 async fn gtfs_rt_handler(
     mut rx_resolved_station: watch::Receiver<Option<config::ResolvedStation>>,
     rx_static_data: watch::Receiver<Option<StaticData>>,
-    tx_traintime_packets: mpsc::Sender<Vec<traintime_packet::TraintimePacket>>,
+    tx_traintime_packets: watch::Sender<Arc<[TraintimePacket]>>,
     http_client: reqwest::Client,
 ) {
     let fetch_interval_seconds = 30;
@@ -86,11 +87,14 @@ async fn gtfs_rt_handler(
             packets
         };
 
-        send_packets(packets, &tx_traintime_packets, fetch_interval_seconds).await;
+        // Send packets
+        if tx_traintime_packets.send(packets.into()).is_err() {
+            break;
+        };
     }
 }
 
-// Build the packets for one tick, or None to skip it because the resolved station was built
+// Build the packets for one tick, soonest first, or None to skip it because the resolved station was built
 // against older static data. The resolver is already re-resolving, so the next tick is consistent
 fn packets_for_tick(
     feed_messages: &[FeedMessage],
@@ -105,7 +109,7 @@ fn packets_for_tick(
         );
         return None;
     }
-    let packets = feed_messages
+    let mut packets: Vec<TraintimePacket> = feed_messages
         .iter()
         .flat_map(|message| match message.header.timestamp {
             None => {
@@ -126,19 +130,8 @@ fn packets_for_tick(
         })
         .flatten()
         .collect();
+    packets.sort_by_key(|packet| packet.mins_until_arrival);
     Some(packets)
-}
-
-async fn send_packets(
-    packets: Vec<TraintimePacket>,
-    tx_traintime_packets: &mpsc::Sender<Vec<traintime_packet::TraintimePacket>>,
-    fetch_interval_seconds: u64,
-) {
-    tx_traintime_packets.send(packets).await.inspect_err(|e| {
-            error!(
-                "error sending traintime packets, retrying packet refresh in {fetch_interval_seconds} seconds: {e}"
-            )
-        }).ok();
 }
 
 // For each endpoint, make a request. Put feed messages together, and return
@@ -231,6 +224,11 @@ mod tests {
 
     // One F train calling at Test Stop 2 in ten minutes, then ending at Test Stop 3
     fn feed_message(timestamp: Option<u64>) -> FeedMessage {
+        feed_message_arriving_in(timestamp, 600)
+    }
+
+    // One F train calling at Test Stop 2 after `seconds_from_now`, then ending at Test Stop 3
+    fn feed_message_arriving_in(timestamp: Option<u64>, seconds_from_now: i64) -> FeedMessage {
         FeedMessage {
             header: FeedHeader {
                 timestamp,
@@ -243,8 +241,8 @@ mod tests {
                         ..Default::default()
                     },
                     stop_time_update: vec![
-                        stop_time_update("201N", 600),
-                        stop_time_update("301N", 900),
+                        stop_time_update("201N", seconds_from_now),
+                        stop_time_update("301N", seconds_from_now + 300),
                     ],
                     ..Default::default()
                 }),
@@ -282,6 +280,24 @@ mod tests {
         );
 
         assert!(packets.is_none());
+    }
+
+    #[test]
+    fn packets_are_sorted_soonest_first_across_feed_messages() {
+        // The later train comes first, and from a different feed, so the order is the sort's
+        let packets = packets_for_tick(
+            &[
+                feed_message_arriving_in(Some(NOW), 900),
+                feed_message_arriving_in(Some(NOW), 300),
+            ],
+            &static_data_at(Generation(1)),
+            Generation(1),
+            &test_stop_2(),
+        )
+        .expect("tick should not be skipped");
+
+        let minutes: Vec<i64> = packets.iter().map(|p| p.mins_until_arrival).collect();
+        assert_eq!(minutes, [5, 15]);
     }
 
     #[test]

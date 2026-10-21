@@ -15,7 +15,8 @@ use crate::config::Selection;
 use crate::error::StartError;
 use crate::types::{gtfs, traintime_packet::TraintimePacket};
 use log::info;
-use tokio::sync::{mpsc, watch};
+use std::sync::Arc;
+use tokio::sync::watch;
 
 /// Wires up the static-data and realtime pipelines, and returns the channel
 /// that decoded packets arrive on. Spawns background tasks onto the current
@@ -24,7 +25,7 @@ pub async fn start(
     selection: Option<Selection>,
 ) -> Result<
     (
-        mpsc::Receiver<Vec<TraintimePacket>>,
+        watch::Receiver<Arc<[TraintimePacket]>>,
         watch::Sender<Option<Selection>>,
     ),
     StartError,
@@ -35,8 +36,8 @@ pub async fn start(
     let (resolver_channels, _resolve_task_join_handle) =
         config::setup_config(selection, rx_static_data.clone());
 
-    // MPSC for Traintime Packets
-    let (tx_traintime_packets, rx_traintime_packets) = mpsc::channel(2);
+    // Watch for Traintime Packets, the latest tick's packets replace the previous tick's
+    let (tx_traintime_packets, rx_traintime_packets) = watch::channel(Arc::default());
 
     let http_client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(15))

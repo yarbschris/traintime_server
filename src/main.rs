@@ -1,6 +1,6 @@
 use server::{
     config::{Selection, SupportedTransitSystem},
-    types::gtfs::StationName,
+    types::{gtfs::StationName, traintime_packet::TraintimePacket},
 };
 
 #[tokio::main]
@@ -16,11 +16,18 @@ async fn main() {
         transit_system,
     }));
 
-    while let Some(mut packets) = rx_traintime_packets.recv().await {
-        packets.sort_by_key(|a| a.mins_until_arrival);
-        packets.reverse();
-        for packet in &packets {
-            println!("{}", packet);
+    loop {
+        if rx_traintime_packets.changed().await.is_err() {
+            break;
         }
+        let packets = rx_traintime_packets.borrow_and_update().clone();
+        draw(&packets);
+    }
+}
+
+// Packets arrive soonest first; print them reversed so the soonest sits just above the prompt
+fn draw(packets: &[TraintimePacket]) {
+    for packet in packets.iter().rev() {
+        println!("{}", packet);
     }
 }
