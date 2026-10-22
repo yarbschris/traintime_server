@@ -1,22 +1,26 @@
-use server::{
-    config::{Selection, SupportedTransitSystem},
-    types::{gtfs::StationName, status::ServerStatus, traintime_packet::TraintimePacket},
-};
+use log::error;
+use server::types::{status::ServerStatus, traintime_packet::TraintimePacket};
+use std::process::exit;
+mod cli;
 
 #[tokio::main]
 async fn main() {
     colog::init();
 
-    let station_name = StationName::from("Katonah");
-    let transit_system = SupportedTransitSystem::MtaMetroNorth;
+    let selection = match cli::get_selection() {
+        Ok(selection) => Some(selection),
+        Err(e) => {
+            error!("{e}");
+            exit(1);
+        }
+    };
+
     let (mut rx_traintime_packets, tx_selection, rx_server_status) =
         server::start(None).await.unwrap();
 
     tokio::spawn(receive_status(rx_server_status));
-    tx_selection.send_replace(Some(Selection {
-        station_name: Some(station_name),
-        transit_system,
-    }));
+
+    tx_selection.send_replace(selection);
 
     loop {
         if rx_traintime_packets.changed().await.is_err() {
