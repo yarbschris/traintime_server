@@ -8,12 +8,13 @@ USAGE:
   traintime_cli [OPTIONS]
 
 FLAGS:
-  -h, --help            Prints help information
-  -l, --list-systems    Lists valid systems
+  -h, --help                    Prints help information
+  -l, --list-systems            Lists valid systems
 
 OPTIONS:
-  --system SYSTEM       Sets transit system
-  --station STATION     Sets station
+  -t, --system TRANSIT_SYSTEM           Sets transit system
+  -s, --station STATION                 Sets station
+  -L, --list-stations TRANSIT_SYSTEM    Lists valid stations within system and exits
 ";
 
 const SYSTEMS: &str = "\
@@ -27,7 +28,7 @@ Valid Systems:
 struct Args {
     /// Selected Transit System
     transit_system: String,
-    station: String,
+    station: Option<String>,
 }
 
 pub fn get_selection() -> Result<Selection, pico_args::Error> {
@@ -41,12 +42,25 @@ pub fn get_selection() -> Result<Selection, pico_args::Error> {
         std::process::exit(0);
     }
 
-    let args = Args {
-        transit_system: pargs.value_from_str("--system")?,
-        station: pargs.value_from_str("--station")?,
+    // In reality, all this flag does is make the parser ignore the
+    // system/station args and instead parse the system given to
+    // --list-stations, returning None for the station_name field.
+    // For now, main will interpret None in station_name as list_stations.
+    // For this basic of a CLI it is okay because we don't have the ability
+    // to send another station after starting the program.
+    let list_stations: Option<String> = pargs.opt_value_from_str(["-L", "--list-stations"])?;
+    let args = match list_stations {
+        Some(transit_system) => Args {
+            transit_system,
+            station: None,
+        },
+        None => Args {
+            transit_system: pargs.value_from_str(["-t", "--system"])?,
+            station: Some(pargs.value_from_str(["-s", "--station"])?),
+        },
     };
 
-    let transit_system = if args.transit_system == "MetroNorth" {
+    let transit_system = if args.transit_system == "MtaMetroNorth" {
         SupportedTransitSystem::MtaMetroNorth
     } else if args.transit_system == "NycSubway" {
         SupportedTransitSystem::NycSubway
@@ -59,10 +73,9 @@ pub fn get_selection() -> Result<Selection, pico_args::Error> {
         );
         return Err(pico_args::Error::ArgumentParsingFailed { cause });
     };
-    let station_name = StationName::from(&args.station);
 
     Ok(Selection {
-        station_name: Some(station_name),
+        station_name: args.station.map(|station| StationName::from(&station)),
         transit_system,
     })
 }

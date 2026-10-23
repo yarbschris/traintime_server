@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use crate::config::Selection;
 use crate::error::StartError;
+use crate::types::static_data::StaticData;
 use crate::types::status::ServerStatus;
 use crate::types::{gtfs, traintime_packet::TraintimePacket};
 use log::info;
@@ -29,6 +30,7 @@ pub async fn start(
         watch::Receiver<Arc<[TraintimePacket]>>,
         watch::Sender<Option<Selection>>,
         watch::Receiver<ServerStatus>,
+        watch::Receiver<Option<StaticData>>,
     ),
     StartError,
 > {
@@ -55,7 +57,7 @@ pub async fn start(
 
     let _rt_join_handle = rt_funcs::setup_gtfs_rt(
         resolver_channels.rx_resolved_station,
-        rx_static_data,
+        rx_static_data.clone(),
         tx_traintime_packets,
         http_client,
         tx_server_status,
@@ -65,5 +67,6 @@ pub async fn start(
         rx_traintime_packets,
         resolver_channels.tx_selection,
         rx_server_status,
+        rx_static_data,
     ))
 }

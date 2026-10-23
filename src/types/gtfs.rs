@@ -7,7 +7,7 @@ pub struct Stop {
     pub parent_station: StopID,
 }
 
-#[derive(Debug, Clone, serde::Deserialize, Hash, PartialEq, std::cmp::Eq)]
+#[derive(Debug, Clone, serde::Deserialize, Hash, PartialEq, PartialOrd, Eq, Ord)]
 pub struct StationName(pub String);
 impl StationName {
     pub fn from(name: &str) -> Self {
