@@ -11,7 +11,7 @@ use crate::{
 use itertools::Itertools;
 use log::{error, info, warn};
 use prost::bytes::Bytes;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub struct StationGroup {
     pub station_name: StationName,
@@ -69,36 +69,18 @@ impl StaticData {
         let stops: Vec<Stop> = rdr.deserialize().collect::<Result<_, _>>()?;
         drop(rdr);
 
-        let (parent_stops, child_stops) = split_stops_into_parents_and_children(stops);
-
         // Stations are complexes that contain platforms, platforms are boarding areas, standalones
         // are also boarding areas with no parent stop
         // let (stations, platforms, standalones) = split_stops(stops);
 
+        // We'll group stations and standalones into groups, then, because platforms
+        // have a parent stop, we can add platforms to their groups by parent's stop_id
         info!("Deserializing Transfer Data...");
         let mut rdr = csv::Reader::from_reader(zip_reader.by_name("transfers.txt")?);
         let transfers: Vec<Transfer> = rdr.deserialize().collect::<Result<_, _>>()?;
         drop(rdr);
 
-        let (mut station_groups, parent_station_group_lookup) =
-            group_parents(&parent_stops, &transfers);
-
-        let mut child_station_group_lookup =
-            build_child_station_group_lookup(child_stops, &parent_station_group_lookup);
-
-        // TODO: this is not the best solution to parent stops w/ no children, fix later :)
-        // so lazy
-        let parent_stations_with_no_children: HashMap<StopID, usize> = parent_station_group_lookup
-            .into_iter()
-            .filter(|(_, parent_index)| {
-                !child_station_group_lookup
-                    .values()
-                    .any(|child_index| child_index == parent_index)
-            })
-            .map(|(parent_stop_id, parent_index)| (parent_stop_id.clone(), parent_index))
-            .collect();
-
-        child_station_group_lookup.extend(parent_stations_with_no_children);
+        let (mut station_groups, stop_group_lookup) = group_stations(stops, transfers);
 
         info!("Deserializing Trip Data...");
         let mut rdr = csv::Reader::from_reader(zip_reader.by_name("trips.txt")?);
@@ -118,7 +100,7 @@ impl StaticData {
             let record: gtfs::StopTime = raw_record.deserialize(Some(&headers))?;
             let stop_id = &record.stop_id;
             if let Some(route_id) = trip_lookup.get(&record.trip_id)
-                && let Some(station_group_index) = child_station_group_lookup.get(stop_id)
+                && let Some(station_group_index) = stop_group_lookup.get(stop_id)
                 && let Some(station_group) = station_groups.get_mut(*station_group_index)
                 && !station_group
                     .route_list
@@ -131,7 +113,7 @@ impl StaticData {
 
         Ok(StaticData {
             route_lookup: build_route_lookup(&station_groups),
-            stop_lookup: build_stop_lookup(station_groups, child_station_group_lookup),
+            stop_lookup: build_stop_lookup(station_groups, stop_group_lookup),
             built_from_system,
             generation,
         })
@@ -168,6 +150,39 @@ fn build_route_lookup(station_groups: &[StationGroup]) -> HashMap<StationName, V
             )
         })
         .collect()
+}
+
+fn group_stations(
+    stops: Vec<Stop>,
+    transfers: Vec<Transfer>,
+) -> (Vec<StationGroup>, HashMap<StopID, usize>) {
+    // First, we split by child and parent stop. Standalone stops are put into parents
+    // because transfers are possible between parents and standalones, so we create groups first,
+    // add the child stops to the groups, then pull out standalone stops so we will need to
+    // pull them out by stop time later.
+    let (parent_stops, child_stops) = split_stops_into_parents_and_children(stops);
+    let (station_groups, parent_station_group_lookup) = group_parents(&parent_stops, &transfers);
+
+    let mut child_station_group_lookup =
+        build_child_station_group_lookup(child_stops, &parent_station_group_lookup);
+
+    // Standalone staions are parent stops with a location_type of Stop, so we create a HashSet of
+    // the standalone station stop_ids.
+    let standalone_stations: HashSet<&StopID> = parent_stops
+        .iter()
+        .filter(|stop| stop.location_type == LocationType::Stop)
+        .map(|stop| &stop.stop_id)
+        .collect();
+
+    let standalone_station_group_lookup: HashMap<StopID, usize> = parent_station_group_lookup
+        .into_iter()
+        .filter(|(stop_id, _)| standalone_stations.contains(*stop_id))
+        .map(|(stop_id, index)| (stop_id.clone(), index))
+        .collect();
+
+    child_station_group_lookup.extend(standalone_station_group_lookup);
+
+    (station_groups, child_station_group_lookup)
 }
 
 // Mark group names as shared if they appear more than once
