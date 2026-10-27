@@ -83,26 +83,28 @@ pub struct Transfer {
 
 // Currently for our purposes, just need to filter out NotPossible transfers
 #[derive(Debug, serde::Deserialize)]
-#[serde(try_from = "u8")]
+#[serde(try_from = "Option<u8>")]
 pub enum TransferType {
-    Reccomended,
+    Recommended,
     Timed,
+    TimedMinimum,
     NotPossible,
     SameVehicle,
     SameVehicleNoInSeat,
 }
 
-impl TryFrom<u8> for TransferType {
+impl TryFrom<Option<u8>> for TransferType {
     type Error = String;
 
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
+    fn try_from(value: Option<u8>) -> Result<Self, Self::Error> {
         match value {
-            0 => Ok(TransferType::Reccomended),
-            1 => Ok(TransferType::Timed),
-            2 => Ok(TransferType::NotPossible),
-            3 => Ok(TransferType::SameVehicle),
-            4 => Ok(TransferType::SameVehicleNoInSeat),
-            _ => Err(format!("Invalid transfer_type {value}")),
+            None | Some(0) => Ok(TransferType::Recommended),
+            Some(1) => Ok(TransferType::Timed),
+            Some(2) => Ok(TransferType::TimedMinimum),
+            Some(3) => Ok(TransferType::NotPossible),
+            Some(4) => Ok(TransferType::SameVehicle),
+            Some(5) => Ok(TransferType::SameVehicleNoInSeat),
+            Some(n) => Err(format!("Invalid transfer_type {n}")),
         }
     }
 }
