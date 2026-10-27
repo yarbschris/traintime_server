@@ -81,7 +81,6 @@ pub struct Transfer {
     pub transfer_type: TransferType,
 }
 
-// Currently for our purposes, just need to filter out NotPossible transfers
 #[derive(Debug, serde::Deserialize)]
 #[serde(try_from = "Option<u8>")]
 pub enum TransferType {

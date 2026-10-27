@@ -210,6 +210,48 @@ trip_2,42N
     );
 }
 
+#[test]
+fn same_vehicle_transfers_do_not_merge_stations() {
+    // Types 4 and 5 mean staying on, or re-boarding, the same vehicle: they say nothing about
+    // walking between the stops. Real feeds give them trip IDs, so the rows carry them too.
+    let stops = "\
+stop_id,stop_name,location_type,parent_station
+51,In Seat,1,
+51N,In Seat,,51
+52,In Seat,1,
+52N,In Seat,,52
+61,Reboard,1,
+61N,Reboard,,61
+62,Reboard,1,
+62N,Reboard,,62
+";
+    let transfers = "\
+from_stop_id,to_stop_id,from_trip_id,to_trip_id,transfer_type
+51,52,trip_1,trip_2,4
+52,51,trip_2,trip_1,4
+61,62,trip_1,trip_2,5
+62,61,trip_2,trip_1,5
+";
+    let stop_times = "\
+trip_id,stop_id
+trip_1,51N
+trip_2,52N
+trip_1,61N
+trip_2,62N
+";
+    let static_data = build_feed(stops, Some(transfers), stop_times).expect("feed should build");
+
+    assert_eq!(
+        labels(&static_data),
+        BTreeMap::from([
+            ("51N", "In Seat (1)"),
+            ("52N", "In Seat (2)"),
+            ("61N", "Reboard (1)"),
+            ("62N", "Reboard (2)"),
+        ])
+    );
+}
+
 // Standalone stops
 
 #[test]
@@ -379,6 +421,16 @@ fn out_of_range_transfer_type_fails_the_build() {
     // A bad row must not be read as "no transfers": that would build, with complexes split
     let result =
         build_fixture_with_transfers(Some("from_stop_id,to_stop_id,transfer_type\n501,601,7\n"));
+
+    assert!(matches!(result, Err(GtfsStaticError::Csv(_))));
+}
+
+#[test]
+fn out_of_range_transfer_type_fails_the_build_even_on_a_row_the_filter_drops() {
+    // A self-transfer is dropped on load, but the row is still invalid. Parse first, then
+    // filter: checking stop IDs before parsing would skip this row and build anyway.
+    let result =
+        build_fixture_with_transfers(Some("from_stop_id,to_stop_id,transfer_type\n501,501,7\n"));
 
     assert!(matches!(result, Err(GtfsStaticError::Csv(_))));
 }

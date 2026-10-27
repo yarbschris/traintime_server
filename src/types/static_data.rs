@@ -74,7 +74,27 @@ impl StaticData {
         let transfers = match zip_reader.by_name("transfers.txt") {
             Ok(file) => {
                 let mut rdr = csv::Reader::from_reader(file);
-                let transfers_vec: Vec<Transfer> = rdr.deserialize().collect::<Result<_, _>>()?;
+                let transfers_vec: Vec<Transfer> = rdr
+                    .deserialize::<Transfer>()
+                    .filter(|transfer_result| {
+                        // Filter out transfers that are useless for grouping.
+                        // Same vehicle transfers are useless for grouping stations.
+                        // Additionally, a transfer to the same station is useless for grouping.
+                        // We let errors pass through so they are caught by collect()?
+                        match transfer_result {
+                            Ok(transfer) => {
+                                transfer.from_stop_id != transfer.to_stop_id
+                                    && !matches!(
+                                        transfer.transfer_type,
+                                        TransferType::NotPossible
+                                            | TransferType::SameVehicle
+                                            | TransferType::SameVehicleNoInSeat
+                                    )
+                            }
+                            Err(_) => true,
+                        }
+                    })
+                    .collect::<Result<_, _>>()?;
                 Some(transfers_vec).filter(|vec| !vec.is_empty())
             }
             Err(zip::result::ZipError::FileNotFound) => {
@@ -195,8 +215,8 @@ fn group_parents(
     HashMap<StopID, usize>,
 ) {
     info!("Building Station Groups");
-    // transfers.txt is optional, so if it does not exist or is empty we just build one StationGroup per parent
-    // station
+    // transfers.txt is optional, so if it does not exist, is empty, or all entries are filtered,
+    // we just build one StationGroup per parent station
     let mut station_group_lookup = HashMap::new();
     let mut standalone_group_lookup = HashMap::new();
     let mut station_groups = Vec::new();
@@ -359,7 +379,7 @@ fn stops_belong_to_same_station_group(
     stop_2: &Stop,
     transfers: &[Transfer],
 ) -> bool {
-    // A stop always belongs to its own group, even if transfers.txt has no self-transfer for it
+    // A stop always belongs to its own group, we drop self transfers in transfers.txt filtering,
     stop_1.stop_id == stop_2.stop_id
         || (stops_have_same_name(stop_1, stop_2)
             && transfer_exists_between_stops(stop_1, stop_2, transfers))
@@ -371,9 +391,7 @@ fn stops_have_same_name(stop_1: &Stop, stop_2: &Stop) -> bool {
 
 fn transfer_exists_between_stops(stop_1: &Stop, stop_2: &Stop, transfers: &[Transfer]) -> bool {
     transfers.iter().any(|transfer| {
-        transfer.from_stop_id == stop_1.stop_id
-            && transfer.to_stop_id == stop_2.stop_id
-            && !matches!(transfer.transfer_type, TransferType::NotPossible)
+        transfer.from_stop_id == stop_1.stop_id && transfer.to_stop_id == stop_2.stop_id
     })
 }
 
