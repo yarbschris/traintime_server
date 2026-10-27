@@ -70,13 +70,23 @@ impl StaticData {
         drop(rdr);
 
         info!("Deserializing Transfer Data...");
-        let mut rdr = csv::Reader::from_reader(zip_reader.by_name("transfers.txt")?);
-        let transfers: Vec<Transfer> = rdr.deserialize().collect::<Result<_, _>>()?;
-        drop(rdr);
+
+        let transfers = match zip_reader.by_name("transfers.txt") {
+            Ok(file) => {
+                let mut rdr = csv::Reader::from_reader(file);
+                let transfers_vec: Vec<Transfer> = rdr.deserialize().collect::<Result<_, _>>()?;
+                Some(transfers_vec).filter(|vec| !vec.is_empty())
+            }
+            Err(zip::result::ZipError::FileNotFound) => {
+                info!("transfers.txt not present in static data");
+                None
+            }
+            Err(e) => return Err(e.into()),
+        };
 
         // We'll group stations and standalones into groups, then, because platforms
         // have a parent stop, we can add platforms to their groups by parent's stop_id
-        let (mut station_groups, stop_group_lookup) = group_stations(stops, &transfers);
+        let (mut station_groups, stop_group_lookup) = group_stations(stops, transfers.as_deref());
 
         info!("Deserializing Trip Data...");
         let mut rdr = csv::Reader::from_reader(zip_reader.by_name("trips.txt")?);
@@ -150,7 +160,7 @@ fn build_route_lookup(station_groups: &[StationGroup]) -> HashMap<StationName, V
 
 fn group_stations(
     stops: Vec<Stop>,
-    transfers: &[Transfer],
+    transfers: Option<&[Transfer]>,
 ) -> (Vec<StationGroup>, HashMap<StopID, usize>) {
     // First, we split by child and parent stop. Standalone stops are put into parents
     // because transfers are possible between parents and standalones, so we create groups first,
@@ -178,20 +188,20 @@ fn group_stations(
 // same complex (they share a stop name, and a transfer is listed in transfers.txt)
 fn group_parents(
     parent_stops: Vec<Stop>,
-    transfers: &[Transfer],
+    transfers: Option<&[Transfer]>,
 ) -> (
     Vec<StationGroup>,
     HashMap<StopID, usize>,
     HashMap<StopID, usize>,
 ) {
     info!("Building Station Groups");
-    // Transfers.txt is optional, so if it does not exist we just build one StationGroup per parent
+    // transfers.txt is optional, so if it does not exist or is empty we just build one StationGroup per parent
     // station
     let mut station_group_lookup = HashMap::new();
     let mut standalone_group_lookup = HashMap::new();
     let mut station_groups = Vec::new();
 
-    if transfers.is_empty() {
+    let Some(transfers) = transfers else {
         for stop in parent_stops.into_iter() {
             let new_index = station_groups.len();
             match stop.location_type {
@@ -213,7 +223,7 @@ fn group_parents(
             station_group_lookup,
             standalone_group_lookup,
         );
-    }
+    };
 
     // Keep track of the current_index into the station_groups vector
     let mut current_map_index: usize = 0;
