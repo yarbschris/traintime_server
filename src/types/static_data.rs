@@ -1,6 +1,6 @@
 use crate::config::SupportedTransitSystem;
 use crate::gtfs;
-use crate::types::gtfs::LocationType;
+use crate::types::gtfs::{LocationType, TransferType};
 use crate::{
     error::GtfsStaticError,
     types::{
@@ -11,7 +11,7 @@ use crate::{
 use itertools::Itertools;
 use log::{error, info, warn};
 use prost::bytes::Bytes;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 pub struct StationGroup {
     pub station_name: StationName,
@@ -69,18 +69,14 @@ impl StaticData {
         let stops: Vec<Stop> = rdr.deserialize().collect::<Result<_, _>>()?;
         drop(rdr);
 
-        // Stations are complexes that contain platforms, platforms are boarding areas, standalones
-        // are also boarding areas with no parent stop
-        // let (stations, platforms, standalones) = split_stops(stops);
-
-        // We'll group stations and standalones into groups, then, because platforms
-        // have a parent stop, we can add platforms to their groups by parent's stop_id
         info!("Deserializing Transfer Data...");
         let mut rdr = csv::Reader::from_reader(zip_reader.by_name("transfers.txt")?);
         let transfers: Vec<Transfer> = rdr.deserialize().collect::<Result<_, _>>()?;
         drop(rdr);
 
-        let (mut station_groups, stop_group_lookup) = group_stations(stops, transfers);
+        // We'll group stations and standalones into groups, then, because platforms
+        // have a parent stop, we can add platforms to their groups by parent's stop_id
+        let (mut station_groups, stop_group_lookup) = group_stations(stops, &transfers);
 
         info!("Deserializing Trip Data...");
         let mut rdr = csv::Reader::from_reader(zip_reader.by_name("trips.txt")?);
@@ -154,35 +150,116 @@ fn build_route_lookup(station_groups: &[StationGroup]) -> HashMap<StationName, V
 
 fn group_stations(
     stops: Vec<Stop>,
-    transfers: Vec<Transfer>,
+    transfers: &[Transfer],
 ) -> (Vec<StationGroup>, HashMap<StopID, usize>) {
     // First, we split by child and parent stop. Standalone stops are put into parents
     // because transfers are possible between parents and standalones, so we create groups first,
-    // add the child stops to the groups, then pull out standalone stops so we will need to
-    // pull them out by stop time later.
+    // then add the child stops to the groups
     let (parent_stops, child_stops) = split_stops_into_parents_and_children(stops);
-    let (station_groups, parent_station_group_lookup) = group_parents(&parent_stops, &transfers);
+    let (station_groups, station_group_lookup, standalone_group_lookup) =
+        group_parents(parent_stops, transfers);
 
     let mut child_station_group_lookup =
-        build_child_station_group_lookup(child_stops, &parent_station_group_lookup);
+        build_child_station_group_lookup(child_stops, &station_group_lookup);
 
-    // Standalone staions are parent stops with a location_type of Stop, so we create a HashSet of
-    // the standalone station stop_ids.
-    let standalone_stations: HashSet<&StopID> = parent_stops
-        .iter()
-        .filter(|stop| stop.location_type == LocationType::Stop)
-        .map(|stop| &stop.stop_id)
-        .collect();
-
-    let standalone_station_group_lookup: HashMap<StopID, usize> = parent_station_group_lookup
-        .into_iter()
-        .filter(|(stop_id, _)| standalone_stations.contains(*stop_id))
-        .map(|(stop_id, index)| (stop_id.clone(), index))
-        .collect();
-
-    child_station_group_lookup.extend(standalone_station_group_lookup);
+    child_station_group_lookup.extend(standalone_group_lookup);
 
     (station_groups, child_station_group_lookup)
+}
+
+// In some systems (NYC), multiple stops share the same name, even if a walking transfer is not a
+// feasible between the routes those shared stops (e.g. In NYC, there are multiple "86 St" stops,
+// but the "86 St" stop that services the '1' route is a miles away from the "86 St" that services
+// the '4', '5', '6','6X' routes. Using "transfers.txt", we identify stops which
+// share a name, but are not listed in "transfers.txt" as possible transfers. Those 'ambiguous'
+// stations new stop name will be displayed as "{StationName} ({route serviced})+"
+//
+// To this end, we separate the stations into StationGroups if they could be considered part of the
+// same complex (they share a stop name, and a transfer is listed in transfers.txt)
+fn group_parents(
+    parent_stops: Vec<Stop>,
+    transfers: &[Transfer],
+) -> (
+    Vec<StationGroup>,
+    HashMap<StopID, usize>,
+    HashMap<StopID, usize>,
+) {
+    info!("Building Station Groups");
+    // Transfers.txt is optional, so if it does not exist we just build one StationGroup per parent
+    // station
+    let mut station_group_lookup = HashMap::new();
+    let mut standalone_group_lookup = HashMap::new();
+    let mut station_groups = Vec::new();
+
+    if transfers.is_empty() {
+        for stop in parent_stops.into_iter() {
+            let new_index = station_groups.len();
+            match stop.location_type {
+                LocationType::Stop => {
+                    station_groups.push(StationGroup::new(stop.stop_name.clone()));
+                    standalone_group_lookup.insert(stop.stop_id, new_index);
+                }
+                LocationType::Station => {
+                    station_groups.push(StationGroup::new(stop.stop_name.clone()));
+                    station_group_lookup.insert(stop.stop_id, new_index);
+                }
+                // Already filtered out by split
+                _ => {}
+            }
+        }
+        mark_station_groups_with_shared_names(&mut station_groups);
+        return (
+            station_groups,
+            station_group_lookup,
+            standalone_group_lookup,
+        );
+    }
+
+    // Keep track of the current_index into the station_groups vector
+    let mut current_map_index: usize = 0;
+
+    for stop in &parent_stops {
+        // Skip if either lookup already has an entry for this station
+        if standalone_group_lookup.contains_key(&stop.stop_id)
+            || station_group_lookup.contains_key(&stop.stop_id)
+        {
+            continue;
+        }
+
+        // Get stop ids that belong to the same group
+        let stops_in_same_group = find_stops_that_belong_to_group(stop, &parent_stops, transfers);
+
+        // Create new station group
+        let new_station_group = StationGroup::new(stop.stop_name.clone());
+
+        {
+            // Add the station group to the station group vector and add mappings from all group
+            // stop_ids -> current_map_index. Increment current_map_index
+            station_groups.push(new_station_group);
+            for group_stop in stops_in_same_group {
+                match group_stop.location_type {
+                    LocationType::Stop => {
+                        standalone_group_lookup
+                            .insert(group_stop.stop_id.clone(), current_map_index);
+                    }
+                    LocationType::Station => {
+                        station_group_lookup.insert(group_stop.stop_id.clone(), current_map_index);
+                    }
+                    // Already filtered out by split
+                    _ => {}
+                }
+            }
+            current_map_index += 1;
+        }
+    }
+
+    mark_station_groups_with_shared_names(&mut station_groups);
+
+    (
+        station_groups,
+        station_group_lookup,
+        standalone_group_lookup,
+    )
 }
 
 // Mark group names as shared if they appear more than once
@@ -209,10 +286,26 @@ fn build_station_name_counter(station_groups: &[StationGroup]) -> HashMap<Statio
     });
     station_name_counter
 }
+
+// Given one parent stop and all parent stops, return a vector of all stop_ids that belong to the
+// same StationGroup as 'target_parent_stop'
+fn find_stops_that_belong_to_group<'a>(
+    target_parent_stop: &Stop,
+    parent_stops: &'a [Stop],
+    transfers: &[Transfer],
+) -> Vec<&'a Stop> {
+    parent_stops
+        .iter()
+        .filter(|other_stop| {
+            stops_belong_to_same_station_group(target_parent_stop, other_stop, transfers)
+        })
+        .collect()
+}
+
 // Build a lookup from child_stop_id -> index into a StationGroup vector
 fn build_child_station_group_lookup(
     child_stops: Vec<Stop>,
-    parent_station_group_lookup: &HashMap<&StopID, usize>,
+    parent_station_group_lookup: &HashMap<StopID, usize>,
 ) -> HashMap<StopID, usize> {
     info!("Building Child Station Group Lookup");
     child_stops
@@ -221,7 +314,7 @@ fn build_child_station_group_lookup(
             let Some(group_position) = parent_station_group_lookup.get(&child_stop.parent_station)
             else {
                 warn!(
-                    "Skipping stop {:?}: parent {:?}_is not a known station",
+                    "Skipping stop {:?}: parent {:?} is not a known station",
                     child_stop.stop_id, child_stop.parent_station
                 );
                 return None;
@@ -231,122 +324,24 @@ fn build_child_station_group_lookup(
         .collect()
 }
 
-// In some systems (NYC), multiple stops share the same name, even if a walking transfer is not a
-// feasible between the routes those shared stops (e.g. In NYC, there are multiple "86 St" stops,
-// but the "86 St" stop that services the '1' route is a miles away from the "86 St" that services
-// the '4', '5', '6','6X' routes. Using "transfers.txt", we identify stops which
-// share a name, but are not listed in "transfers.txt" as possible transfers. Those 'ambiguous'
-// stations new stop name will be displayed as "{StationName} ({route serviced})+"
-//
-// To this end, we separate the stations into StationGroups if they could be considered part of the
-// same complex (they share a stop name, and a transfer is listed in transfers.txt)
-fn group_parents<'a>(
-    parent_stops: &'a Vec<Stop>,
-    transfers: &[Transfer],
-) -> (Vec<StationGroup>, HashMap<&'a StopID, usize>) {
-    info!("Building Station Groups");
-    // Transfers.txt is optional, so if it does not exist we just build one StationGroup per parent
-    // station
-    if transfers.is_empty() {
-        return parent_stops
-            .iter()
-            .enumerate()
-            .map(|(index, parent_stop)| {
-                (
-                    StationGroup::new(parent_stop.stop_name.clone()),
-                    (&parent_stop.stop_id, index),
-                )
-            })
-            .collect();
-    }
-
-    let mut station_groups: Vec<StationGroup> = Vec::new();
-    let mut parent_station_group_lookup: HashMap<&StopID, usize> = HashMap::new();
-
-    // Keep track of the current_index into the station_groups vector
-    let mut current_map_index: usize = 0;
-
-    for stop in parent_stops {
-        // Skip if lookup already has an entry for this station
-        if parent_station_group_lookup.contains_key(&stop.stop_id) {
-            continue;
-        }
-
-        // Get stop ids that belong to the same group
-        let stops_ids_in_same_group =
-            find_stop_ids_that_belong_to_group(stop, parent_stops, transfers);
-
-        // Create new station group
-        let new_station_group = StationGroup::new(stop.stop_name.clone());
-
-        {
-            // Add the station group to the station group vector and add mappings from all group
-            // stop_ids -> current_map_index. Increment current_map_index
-            station_groups.push(new_station_group);
-            stops_ids_in_same_group.into_iter().for_each(|stop_id| {
-                parent_station_group_lookup.insert(stop_id, current_map_index);
-            });
-            current_map_index += 1;
-        }
-    }
-
-    mark_station_groups_with_shared_names(&mut station_groups);
-
-    (station_groups, parent_station_group_lookup)
-}
-
-// Given one parent stop and all parent stops, return a vector of all stop_ids that belong to the
-// same StationGroup as 'target_parent_stop'
-fn find_stop_ids_that_belong_to_group<'a>(
-    target_parent_stop: &Stop,
-    parent_stops: &'a [Stop],
-    transfers: &[Transfer],
-) -> Vec<&'a StopID> {
-    parent_stops
-        .iter()
-        .filter(|other_stop| {
-            stops_belong_to_same_station_group(target_parent_stop, other_stop, transfers)
-        })
-        .map(|stop| &stop.stop_id)
-        .collect()
-}
-
 // Given a vector of stops, separate into a tuple of (Parents, Children)
 fn split_stops_into_parents_and_children(stops: Vec<Stop>) -> (Vec<Stop>, Vec<Stop>) {
     stops.into_iter().fold(
         (Vec::new(), Vec::new()),
         |(mut parents, mut children), stop| {
-            if stop.parent_station.0.is_empty() {
+            if stop.parent_station.0.is_empty()
+                && matches!(
+                    stop.location_type,
+                    LocationType::Stop | LocationType::Station
+                )
+            {
                 parents.push(stop)
-            } else {
+            } else if matches!(stop.location_type, LocationType::Stop) {
                 children.push(stop)
             }
             (parents, children)
         },
     )
-}
-
-// TODO: Do I want to make a separate enum for different location types?
-/// Given a vector of stops, separate into a tuple of (Station, Platform, Standalone Stop)
-fn split_stops(stops: Vec<Stop>) -> (Vec<Stop>, Vec<Stop>, Vec<Stop>) {
-    let mut stations = Vec::new();
-    let mut platforms = Vec::new();
-    let mut standalones = Vec::new();
-
-    for stop in stops {
-        match stop.location_type {
-            LocationType::Stop => {
-                if stop.parent_station.0.is_empty() {
-                    standalones.push(stop);
-                } else {
-                    platforms.push(stop);
-                }
-            }
-            LocationType::Station => stations.push(stop),
-            _ => continue,
-        }
-    }
-    (stations, platforms, standalones)
 }
 
 fn stops_belong_to_same_station_group(
@@ -366,7 +361,9 @@ fn stops_have_same_name(stop_1: &Stop, stop_2: &Stop) -> bool {
 
 fn transfer_exists_between_stops(stop_1: &Stop, stop_2: &Stop, transfers: &[Transfer]) -> bool {
     transfers.iter().any(|transfer| {
-        transfer.from_stop_id == stop_1.stop_id && transfer.to_stop_id == stop_2.stop_id
+        transfer.from_stop_id == stop_1.stop_id
+            && transfer.to_stop_id == stop_2.stop_id
+            && !matches!(transfer.transfer_type, TransferType::NotPossible)
     })
 }
 
