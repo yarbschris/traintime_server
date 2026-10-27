@@ -1,5 +1,6 @@
 use crate::config::SupportedTransitSystem;
 use crate::gtfs;
+use crate::types::gtfs::LocationType;
 use crate::{
     error::GtfsStaticError,
     types::{
@@ -69,6 +70,10 @@ impl StaticData {
         drop(rdr);
 
         let (parent_stops, child_stops) = split_stops_into_parents_and_children(stops);
+
+        // Stations are complexes that contain platforms, platforms are boarding areas, standalones
+        // are also boarding areas with no parent stop
+        // let (stations, platforms, standalones) = split_stops(stops);
 
         info!("Deserializing Transfer Data...");
         let mut rdr = csv::Reader::from_reader(zip_reader.by_name("transfers.txt")?);
@@ -304,6 +309,29 @@ fn split_stops_into_parents_and_children(stops: Vec<Stop>) -> (Vec<Stop>, Vec<St
             (parents, children)
         },
     )
+}
+
+// TODO: Do I want to make a separate enum for different location types?
+/// Given a vector of stops, separate into a tuple of (Station, Platform, Standalone Stop)
+fn split_stops(stops: Vec<Stop>) -> (Vec<Stop>, Vec<Stop>, Vec<Stop>) {
+    let mut stations = Vec::new();
+    let mut platforms = Vec::new();
+    let mut standalones = Vec::new();
+
+    for stop in stops {
+        match stop.location_type {
+            LocationType::Stop => {
+                if stop.parent_station.0.is_empty() {
+                    standalones.push(stop);
+                } else {
+                    platforms.push(stop);
+                }
+            }
+            LocationType::Station => stations.push(stop),
+            _ => continue,
+        }
+    }
+    (stations, platforms, standalones)
 }
 
 fn stops_belong_to_same_station_group(

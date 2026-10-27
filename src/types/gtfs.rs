@@ -5,6 +5,7 @@ pub struct Stop {
     pub stop_id: StopID,
     pub stop_name: StationName,
     pub parent_station: StopID,
+    pub location_type: LocationType,
 }
 
 #[derive(Debug, Clone, serde::Deserialize, Hash, PartialEq, PartialOrd, Eq, Ord)]
@@ -18,6 +19,31 @@ impl StationName {
 impl Display for StationName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(try_from = "Option<u8>")]
+pub enum LocationType {
+    Stop,         // A location where passengers board a transit vehicle.
+    Station,      // A physical structure or area that contains one or more platform
+    EntranceExit, // A location where passengers enter / exit a station
+    GenericNode,  // A location within a station not matching any other, not necessary for us
+    BoardingArea, // A specific location on a platform, also unnecessary
+}
+
+impl TryFrom<Option<u8>> for LocationType {
+    type Error = String;
+
+    fn try_from(value: Option<u8>) -> Result<Self, Self::Error> {
+        match value {
+            None | Some(0) => Ok(LocationType::Stop),
+            Some(1) => Ok(LocationType::Station),
+            Some(2) => Ok(LocationType::EntranceExit),
+            Some(3) => Ok(LocationType::GenericNode),
+            Some(4) => Ok(LocationType::BoardingArea),
+            Some(n) => Err(format!("Invalid location_type {n}")),
+        }
     }
 }
 
@@ -52,6 +78,33 @@ pub struct Trip {
 pub struct Transfer {
     pub from_stop_id: StopID,
     pub to_stop_id: StopID,
+    pub transfer_type: TransferType,
+}
+
+// Currently for our purposes, just need to filter out NotPossible transfers
+#[derive(Debug, serde::Deserialize)]
+#[serde(try_from = "u8")]
+pub enum TransferType {
+    Reccomended,
+    Timed,
+    NotPossible,
+    SameVehicle,
+    SameVehicleNoInSeat,
+}
+
+impl TryFrom<u8> for TransferType {
+    type Error = String;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(TransferType::Reccomended),
+            1 => Ok(TransferType::Timed),
+            2 => Ok(TransferType::NotPossible),
+            3 => Ok(TransferType::SameVehicle),
+            4 => Ok(TransferType::SameVehicleNoInSeat),
+            _ => Err(format!("Invalid transfer_type {value}")),
+        }
+    }
 }
 
 #[derive(Debug, serde::Deserialize)]
