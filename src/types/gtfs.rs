@@ -4,7 +4,7 @@ use std::fmt::Display;
 pub struct Stop {
     pub stop_id: StopID,
     pub stop_name: StationName,
-    pub parent_station: StopID,
+    pub parent_station: Option<StopID>,
     pub location_type: LocationType,
 }
 

@@ -237,6 +237,28 @@ trip_2,2
 }
 
 #[test]
+fn stops_file_without_parent_station_column_builds() {
+    // parent_station is only required for location_type 2-4, so a feed with no stations can
+    // leave the column out. Every stop is then standalone.
+    let stops = "\
+stop_id,stop_name
+1,Katonah
+2,Bedford Hills
+";
+    let stop_times = "\
+trip_id,stop_id
+trip_1,1
+trip_2,2
+";
+    let static_data = build_feed(stops, None, stop_times).expect("feed should build");
+
+    assert_eq!(
+        labels(&static_data),
+        BTreeMap::from([("1", "Katonah"), ("2", "Bedford Hills")])
+    );
+}
+
+#[test]
 fn standalone_stop_joins_a_same_name_station_it_has_a_transfer_to() {
     // Station 71 has a platform; 72 is a standalone stop with the same name. Both IDs must
     // reach the lookup: platforms through the station, the standalone stop by its own ID.

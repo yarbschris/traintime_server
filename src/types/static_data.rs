@@ -321,11 +321,11 @@ fn build_child_station_group_lookup(
     child_stops
         .into_iter()
         .filter_map(|child_stop| {
-            let Some(group_position) = parent_station_group_lookup.get(&child_stop.parent_station)
-            else {
+            let parent_stop_id = child_stop.parent_station?;
+            let Some(group_position) = parent_station_group_lookup.get(&parent_stop_id) else {
                 warn!(
                     "Skipping stop {:?}: parent {:?} is not a known station",
-                    child_stop.stop_id, child_stop.parent_station
+                    child_stop.stop_id, parent_stop_id
                 );
                 return None;
             };
@@ -339,7 +339,7 @@ fn split_stops_into_parents_and_children(stops: Vec<Stop>) -> (Vec<Stop>, Vec<St
     stops.into_iter().fold(
         (Vec::new(), Vec::new()),
         |(mut parents, mut children), stop| {
-            if stop.parent_station.0.is_empty()
+            if stop.parent_station.is_none()
                 && matches!(
                     stop.location_type,
                     LocationType::Stop | LocationType::Station
