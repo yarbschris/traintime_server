@@ -1,3 +1,4 @@
+pub mod disjoint_set;
 pub mod generation;
 pub mod gtfs;
 pub mod static_data;

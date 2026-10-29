@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, serde::Deserialize, PartialEq, Eq, Hash)]
 pub struct Stop {
     pub stop_id: StopID,
     pub stop_name: StationName,
@@ -22,7 +22,7 @@ impl Display for StationName {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, Hash)]
 #[serde(try_from = "Option<u8>")]
 pub enum LocationType {
     Stop,         // A location where passengers board a transit vehicle.
@@ -114,17 +114,50 @@ pub struct StopTime {
     pub stop_id: StopID,
 }
 
+// Unused, but planned for future use
 #[allow(unused)]
 #[derive(Debug, serde::Deserialize)]
 struct Route {
-    route_id: String,
-    agency_id: String,
-    route_short_name: String,
-    route_long_name: String,
-    route_desc: String,
-    route_type: String,
-    route_url: String,
-    route_color: String,
-    route_text_color: String,
-    route_sort_order: String,
+    route_id: RouteID,
+    route_short_name: Option<String>,
+    route_long_name: Option<String>,
+    route_type: RouteType,
+    route_color: Option<String>,
+    route_text_color: Option<String>,
+    route_sort_order: Option<String>,
+}
+
+#[allow(unused)]
+#[derive(Debug, serde::Deserialize)]
+#[serde(try_from = "u8")]
+enum RouteType {
+    LightRailOrStreetLevel,
+    Subway,
+    Rail,
+    Bus,
+    Ferry,
+    CableTram,
+    AerialLift,
+    Funicular,
+    Trolleybus,
+    Monorail,
+}
+
+impl TryFrom<u8> for RouteType {
+    type Error = String;
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(RouteType::LightRailOrStreetLevel),
+            1 => Ok(RouteType::Subway),
+            2 => Ok(RouteType::Rail),
+            3 => Ok(RouteType::Bus),
+            4 => Ok(RouteType::Ferry),
+            5 => Ok(RouteType::CableTram),
+            6 => Ok(RouteType::AerialLift),
+            7 => Ok(RouteType::Funicular),
+            11 => Ok(RouteType::Trolleybus),
+            12 => Ok(RouteType::Monorail),
+            _ => Err(format!("Invalid route_type: {value}")),
+        }
+    }
 }

@@ -1,6 +1,9 @@
 use crate::config::SupportedTransitSystem;
 use crate::gtfs;
-use crate::types::gtfs::{LocationType, TransferType};
+use crate::types::{
+    disjoint_set::DisjointSet,
+    gtfs::{LocationType, TransferType},
+};
 use crate::{
     error::GtfsStaticError,
     types::{
@@ -197,6 +200,73 @@ fn group_stations(
     (station_groups, child_station_group_lookup)
 }
 
+fn build_disjoint_set(parent_stops: &[Stop], transfers: &[Transfer]) -> DisjointSet {
+    let mut disjoint_set = DisjointSet::with_len(parent_stops.len());
+    let index_of: HashMap<&StopID, usize> = parent_stops
+        .iter()
+        .enumerate()
+        .map(|(id, stop)| (&stop.stop_id, id))
+        .collect();
+
+    for transfer in transfers {
+        if let (Some(&to_id), Some(&from_id)) = (
+            index_of.get(&transfer.to_stop_id),
+            index_of.get(&transfer.from_stop_id),
+        ) && parent_stops[to_id].stop_name == parent_stops[from_id].stop_name
+        {
+            disjoint_set.union(to_id, from_id);
+        }
+    }
+
+    disjoint_set
+}
+
+fn build_station_groups(
+    disjoint_set: DisjointSet,
+    parent_stops: Vec<Stop>,
+) -> (
+    Vec<StationGroup>,
+    HashMap<StopID, usize>,
+    HashMap<StopID, usize>,
+) {
+    let mut station_groups = Vec::new();
+    let mut station_map = HashMap::new();
+    let mut standalone_map = HashMap::new();
+
+    for root in disjoint_set.get_roots() {
+        // each stops id in the disjoint set was determined by its position in the parent_stops vec
+        let Some(root_stop) = parent_stops.get(root) else {
+            error!("internal disjoint set error: id {root} invalid");
+            continue;
+        };
+
+        let group_index = station_groups.len();
+        let new_group = StationGroup::new(root_stop.stop_name.clone());
+        station_groups.push(new_group);
+
+        let member_ids = disjoint_set.members_of(root);
+        for &member_id in member_ids {
+            if disjoint_set.in_same_group(member_id, root) {
+                let Some(member_stop) = parent_stops.get(member_id) else {
+                    error!("internal disjoint set error: id {member_id} is invalid");
+                    continue;
+                };
+                match member_stop.location_type {
+                    LocationType::Stop => {
+                        standalone_map.insert(member_stop.stop_id.clone(), group_index);
+                    }
+                    LocationType::Station => {
+                        station_map.insert(member_stop.stop_id.clone(), group_index);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    dbg!(station_groups.len());
+    (station_groups, station_map, standalone_map)
+}
+
 // In some systems (NYC), multiple stops share the same name, even if a walking transfer is not a
 // feasible between the routes those shared stops (e.g. In NYC, there are multiple "86 St" stops,
 // but the "86 St" stop that services the '1' route is a miles away from the "86 St" that services
@@ -217,11 +287,11 @@ fn group_parents(
     info!("Building Station Groups");
     // transfers.txt is optional, so if it does not exist, is empty, or all entries are filtered,
     // we just build one StationGroup per parent station
-    let mut station_group_lookup = HashMap::new();
-    let mut standalone_group_lookup = HashMap::new();
-    let mut station_groups = Vec::new();
 
     let Some(transfers) = transfers else {
+        let mut station_group_lookup = HashMap::new();
+        let mut standalone_group_lookup = HashMap::new();
+        let mut station_groups = Vec::new();
         for stop in parent_stops.into_iter() {
             let new_index = station_groups.len();
             match stop.location_type {
@@ -245,43 +315,9 @@ fn group_parents(
         );
     };
 
-    // Keep track of the current_index into the station_groups vector
-    let mut current_map_index: usize = 0;
-
-    for stop in &parent_stops {
-        // Skip if either lookup already has an entry for this station
-        if standalone_group_lookup.contains_key(&stop.stop_id)
-            || station_group_lookup.contains_key(&stop.stop_id)
-        {
-            continue;
-        }
-
-        // Get stop ids that belong to the same group
-        let stops_in_same_group = find_stops_that_belong_to_group(stop, &parent_stops, transfers);
-
-        // Create new station group
-        let new_station_group = StationGroup::new(stop.stop_name.clone());
-
-        {
-            // Add the station group to the station group vector and add mappings from all group
-            // stop_ids -> current_map_index. Increment current_map_index
-            station_groups.push(new_station_group);
-            for group_stop in stops_in_same_group {
-                match group_stop.location_type {
-                    LocationType::Stop => {
-                        standalone_group_lookup
-                            .insert(group_stop.stop_id.clone(), current_map_index);
-                    }
-                    LocationType::Station => {
-                        station_group_lookup.insert(group_stop.stop_id.clone(), current_map_index);
-                    }
-                    // Already filtered out by split
-                    _ => {}
-                }
-            }
-            current_map_index += 1;
-        }
-    }
+    let disjoint_set = build_disjoint_set(&parent_stops, transfers);
+    let (mut station_groups, station_group_lookup, standalone_group_lookup) =
+        build_station_groups(disjoint_set, parent_stops);
 
     mark_station_groups_with_shared_names(&mut station_groups);
 
@@ -315,21 +351,6 @@ fn build_station_name_counter(station_groups: &[StationGroup]) -> HashMap<Statio
             .or_insert(1);
     });
     station_name_counter
-}
-
-// Given one parent stop and all parent stops, return a vector of all stop_ids that belong to the
-// same StationGroup as 'target_parent_stop'
-fn find_stops_that_belong_to_group<'a>(
-    target_parent_stop: &Stop,
-    parent_stops: &'a [Stop],
-    transfers: &[Transfer],
-) -> Vec<&'a Stop> {
-    parent_stops
-        .iter()
-        .filter(|other_stop| {
-            stops_belong_to_same_station_group(target_parent_stop, other_stop, transfers)
-        })
-        .collect()
 }
 
 // Build a lookup from child_stop_id -> index into a StationGroup vector
@@ -372,27 +393,6 @@ fn split_stops_into_parents_and_children(stops: Vec<Stop>) -> (Vec<Stop>, Vec<St
             (parents, children)
         },
     )
-}
-
-fn stops_belong_to_same_station_group(
-    stop_1: &Stop,
-    stop_2: &Stop,
-    transfers: &[Transfer],
-) -> bool {
-    // A stop always belongs to its own group, we drop self transfers in transfers.txt filtering,
-    stop_1.stop_id == stop_2.stop_id
-        || (stops_have_same_name(stop_1, stop_2)
-            && transfer_exists_between_stops(stop_1, stop_2, transfers))
-}
-
-fn stops_have_same_name(stop_1: &Stop, stop_2: &Stop) -> bool {
-    stop_1.stop_name.0 == stop_2.stop_name.0
-}
-
-fn transfer_exists_between_stops(stop_1: &Stop, stop_2: &Stop, transfers: &[Transfer]) -> bool {
-    transfers.iter().any(|transfer| {
-        transfer.from_stop_id == stop_1.stop_id && transfer.to_stop_id == stop_2.stop_id
-    })
 }
 
 // Build HashMap to Lookup RouteID from TripID
